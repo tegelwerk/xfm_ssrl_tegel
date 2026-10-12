@@ -1,0 +1,30 @@
+id: https://w3id.org/tegel/xfm/processed
+name: processed_measurement
+classes:
+  ProcessedMeasurement:
+    tree_root: true
+    attributes:
+      key:
+        range: string
+      measurement_id:
+        range: string
+      sample_code:
+        range: string
+      campaign:
+        range: string
+      cache:
+        range: string
+      kind:
+        range: string
+      beam_energy_kev:
+        range: string
+      acquired:
+        range: string
+      technique:
+        range: string
+      crate_path:
+        range: string
+      designated:
+        range: string
+      payload_uri:
+        range: string

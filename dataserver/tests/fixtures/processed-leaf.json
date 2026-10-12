@@ -1,0 +1,14 @@
+{
+  "key": "ProcessedCache--aapl-P1-leaf1-10serp",
+  "measurement_id": "aapl-P1-leaf1-10serp",
+  "sample_code": "AAPL-P1-leaf1",
+  "campaign": "aapl",
+  "cache": "ProcessedCache",
+  "kind": "mca_fit",
+  "beam_energy_kev": "10",
+  "acquired": "",
+  "technique": "xrf",
+  "crate_path": ".",
+  "designated": "masked-clr.zarr",
+  "payload_uri": ""
+}

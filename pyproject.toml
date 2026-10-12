@@ -1,0 +1,47 @@
+[project]
+name = "xfm-ssrl-tegel"
+version = "0.1.0"
+description = "SSRL XFM incarnation of Tegel: dataserver, dashboard, and actions."
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["dataserver", "dash", "actions"]
+
+[tool.uv.sources]
+tegel-core = { path = "../tegel/tegel-core", editable = true }
+tegel-dataserver = { path = "../tegel/tegel-base/packages/dataserver", editable = true }
+tegel-xfm = { workspace = true }
+tegel-xfm-dash = { workspace = true }
+tegel-xfm-actions = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "tegel-xfm",
+    "tegel-xfm-dash",
+    "tegel-xfm-actions",
+    "tegel-dataserver",
+    "pytest>=8",
+    "ruff>=0.8",
+    "httpx",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["dataserver/tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["dataserver/src", "dataserver/tests", "dash/src", "actions/src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tegel"]

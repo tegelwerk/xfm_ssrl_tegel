@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tegel-xfm"
+version = "0.1.0"
+description = "SSRL XFM dataserver plugin. The server loads it by entry point."
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["tegel-core", "pyyaml"]
+
+[project.entry-points."tegel.resource_types"]
+xfm-processed = "tegel.xfm.dataserver:RECORD"
+
+[project.entry-points."tegel.extractors"]
+xfm-processed = "tegel.xfm.dataserver:ProcessedExtractor"
+
+[project.entry-points."tegel.readers"]
+xfm-processed = "tegel.xfm.dataserver:ProcessedReader"
+
+[project.scripts]
+tegel-xfm = "tegel.xfm.dataserver.launch:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "tegel-dataserver", "httpx"]
+
+[tool.hatch.build.targets.wheel]
+only-include = ["src/tegel"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "schema", "tests", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tegel"]

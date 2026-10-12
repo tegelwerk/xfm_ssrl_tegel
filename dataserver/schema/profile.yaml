@@ -1,0 +1,23 @@
+id: https://w3id.org/tegel/xfm/processed/profile
+name: processed measurements
+schema: measurement.yaml
+search:
+  - sample_code
+  - campaign
+  - cache
+  - kind
+  - beam_energy_kev
+properties:
+  - measurement_id
+  - sample_code
+  - campaign
+  - cache
+  - kind
+  - beam_energy_kev
+  - acquired
+  - technique
+  - designated
+entity:
+  name: measurement_id
+  identifier: measurement_id
+  dateCreated: acquired

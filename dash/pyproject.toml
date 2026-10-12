@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tegel-xfm-dash"
+version = "0.1.0"
+description = "Dashboard for the SSRL XFM incarnation. Placeholder."
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["tegel-core"]
+
+[tool.hatch.build.targets.wheel]
+only-include = ["src/tegel"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "README.md", "LICENSE", "pyproject.toml"]
