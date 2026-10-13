@@ -2,7 +2,7 @@
 
 This is the dataserver package of the SSRL XFM incarnation. Install it and the reference server loads it through entry points. It does not copy the Personalized Data Server stack, its secrets, or the measurement bytes.
 
-The plugin claims two inputs. A JSON record whose `cache` is `ProcessedCache`, and `ro-crate-metadata.json` inside a `ProcessedCache` directory. For a crate it reads `lambda-record.yaml` beside that file and writes one catalog record per crate. `process` copies attributes from `schema/measurement.yaml`. The reader returns shape and chunk shape from the designated store's `zarr.json` and does not open chunk files.
+The plugin claims two inputs. A JSON record whose `cache` is `ProcessedCache`, and `ro-crate-metadata.json` inside a `ProcessedCache` directory. For a crate it reads `lambda-record.yaml` beside that file and writes one catalog record per crate. `process` copies attributes from `schema/measurement.yaml`. The reader returns shape and chunk shape from the designated store's `zarr.json` and does not open chunk files. When that store is a zarr array, launch registers it with Tiled so `/api/v1/array/full/{key}` can read it.
 
 Search fields are `sample_code`, `campaign`, `cache`, `kind`, and `beam_energy_kev`.
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import secrets
 import subprocess
 import time
@@ -16,7 +17,7 @@ from tegel.core.plugins import PluginContractError, check_package
 from tegel.dataserver.app import create_app
 from tegel.dataserver.catalog import insert_record
 from tegel.dataserver.config import ServerConfig
-from tegel.xfm.dataserver import _array_metadata, _local_path
+from tegel.xfm.dataserver import _array_directory, _array_metadata, _local_path
 
 HOST = "127.0.0.1"
 PORT = 8000
@@ -62,6 +63,7 @@ def main() -> None:
             port=PORT,
         )
     )
+    _grant_array_reads(app)
     count = _catalog_records(app, records)
     token = _reader_token(issuer, creds)
     token_path = output / "token"
@@ -302,17 +304,107 @@ def _catalog_records(app: Any, records: Path) -> int:
         key = str(package.metadata.get("key", ""))
         if not key or "/" in key or "\\" in key:
             raise SystemExit(f"{path} has no single-segment catalog key")
-        insert_record(
+        array_dir = _designated_array(package.metadata)
+        _insert_record(
             app.state.tegel_catalog,
             key=key,
             metadata=package.metadata,
-            structure_family=_family(package.metadata),
+            array_dir=array_dir,
         )
         count += 1
-        print(f"catalogued {key}", flush=True)
+        if array_dir is None:
+            print(f"catalogued {key}", flush=True)
+        else:
+            print(f"catalogued {key} from {array_dir}", flush=True)
     if count == 0:
         raise SystemExit(f"no processed record in {records}")
     return count
+
+
+def _designated_array(metadata: dict[str, Any]) -> Path | None:
+    uri = metadata.get("payload_uri")
+    if not isinstance(uri, str):
+        return None
+    return _array_directory(_local_path(uri))
+
+
+def _insert_record(
+    tree: Any,
+    *,
+    key: str,
+    metadata: dict[str, Any],
+    array_dir: Path | None,
+) -> None:
+    """Write one catalog node. A zarr array is registered for Tiled to read."""
+    if array_dir is None or not _register_array(tree, key, metadata, array_dir):
+        insert_record(
+            tree,
+            key=key,
+            metadata=metadata,
+            structure_family=_family(metadata),
+        )
+
+
+def _register_array(tree: Any, key: str, metadata: dict[str, Any], array_dir: Path) -> bool:
+    import zarr
+    from tiled.mimetypes import ZARR_MIMETYPE
+    from tiled.storage import parse_storage, register_storage
+    from tiled.structures.array import ArrayStructure
+    from tiled.structures.core import StructureFamily
+    from tiled.structures.data_source import Asset, DataSource, Management
+
+    try:
+        array = zarr.open(array_dir)
+    except (OSError, ValueError):
+        return False
+    if not hasattr(array, "shape"):
+        return False
+    resolved = array_dir.resolve()
+    storage = parse_storage(resolved)
+    tree.context.readable_storage[storage.uri] = storage
+    register_storage(storage)
+    if not hasattr(tree.context, "streaming_cache"):
+        tree.context.streaming_cache = None
+    source = DataSource(
+        structure_family=StructureFamily.array,
+        structure=ArrayStructure.from_array(array),
+        mimetype=ZARR_MIMETYPE,
+        management=Management.external,
+        assets=[
+            Asset(
+                data_uri=resolved.as_uri(),
+                is_directory=True,
+                parameter="data_uri",
+                num=0,
+            )
+        ],
+    )
+
+    async def _write() -> None:
+        await tree.create_node(
+            structure_family=StructureFamily.array,
+            metadata=metadata,
+            key=key,
+            data_sources=[source],
+        )
+
+    asyncio.run(_write())
+    return True
+
+
+def _grant_array_reads(app: Any) -> None:
+    """Let the Keycloak reader call Tiled's array routes.
+
+    Keycloak issues ``scope=email profile`` and no ``scp`` claim. Tiled grants
+    the mapped scopes when ``scp`` is absent, which is what ``read:data`` needs.
+    """
+    from tiled.server.settings import get_settings
+
+    settings = app.dependency_overrides[get_settings]()
+    authenticator = getattr(settings, "authenticator", None)
+    if authenticator is None:
+        return
+    authenticator._scopes_map = {"reader": ["read:metadata", "read:data"]}
 
 
 def _family(metadata: dict[str, Any]) -> str:

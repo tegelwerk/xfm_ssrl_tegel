@@ -267,7 +267,8 @@ def _local_path(uri: str) -> Path:
     return Path(uri)
 
 
-def _array_metadata(store: Path) -> dict[str, Any] | None:
+def _array_directory(store: Path) -> Path | None:
+    """Return the directory of the designated array inside a zarr store."""
     if store.is_file():
         return None
     preferred = store / "clr" / "zarr.json"
@@ -281,5 +282,15 @@ def _array_metadata(store: Path) -> dict[str, Any] | None:
         seen.add(path)
         body = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(body, dict) and body.get("node_type") == "array" and "shape" in body:
-            return body
+            return path.parent
+    return None
+
+
+def _array_metadata(store: Path) -> dict[str, Any] | None:
+    directory = _array_directory(store)
+    if directory is None:
+        return None
+    body = json.loads((directory / "zarr.json").read_text(encoding="utf-8"))
+    if isinstance(body, dict) and body.get("node_type") == "array" and "shape" in body:
+        return body
     return None

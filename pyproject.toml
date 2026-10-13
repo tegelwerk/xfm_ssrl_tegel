@@ -33,12 +33,12 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["dataserver/tests"]
+testpaths = ["dataserver/tests", "dash/tests"]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["dataserver/src", "dataserver/tests", "dash/src", "actions/src"]
+src = ["dataserver/src", "dataserver/tests", "dash/src", "dash/tests", "actions/src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

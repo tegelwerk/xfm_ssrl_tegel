@@ -89,6 +89,36 @@ def test_entry_point_claims_only_processed_records(tmp_path: Path) -> None:
     assert Path(store.removeprefix("file://")).joinpath("clr", "zarr.json").is_file()
 
 
+def test_zarr_array_is_readable_through_tiled(tmp_path: Path) -> None:
+    import asyncio
+
+    import numpy as np
+    import zarr
+
+    from tegel.dataserver.catalog import open_catalog
+    from tegel.xfm.dataserver.launch import _insert_record
+
+    array_dir = tmp_path / "masked-clr.zarr" / "clr"
+    values = np.arange(12, dtype="float64").reshape(3, 4)
+    created = zarr.create_array(array_dir, shape=(3, 4), dtype="float64", chunks=(2, 2))
+    created[:] = values
+    tree = open_catalog(f"sqlite:///{tmp_path / 'catalog.db'}")
+    _insert_record(
+        tree,
+        key="leaf-1",
+        metadata={"key": "leaf-1"},
+        array_dir=array_dir,
+    )
+
+    async def _read() -> np.ndarray:
+        node = await tree.lookup_adapter(["leaf-1"])
+        return await node.read()
+
+    found = asyncio.run(_read())
+    assert found.shape == (3, 4)
+    assert found[1, 1] == values[1, 1]
+
+
 def test_server_loads_the_plugin_and_describes_chunks(tmp_path: Path) -> None:
     catalog = tmp_path / "catalog.db"
     with OIDCIssuer() as issued:
