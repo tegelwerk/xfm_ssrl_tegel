@@ -1,20 +1,14 @@
 # Processed measurement plugin
 
-This is the dataserver package of the SSRL XFM incarnation. Install it and the reference server loads it through entry points. It does not copy the Personalized Data Server stack, its secrets, or the measurement bytes.
+The dataserver package of the SSRL XFM incarnation (Tegel spec 0.4.0). The reference server loads it through entry points. It ships no schema: the profile in `schema/profile.yaml` names `xfm/processed.yaml` under `TEGEL_SCHEMA_ROOT` (in this repository, `../schemas`).
 
-The plugin claims two inputs. A JSON record whose `cache` is `ProcessedCache`, and `ro-crate-metadata.json` inside a `ProcessedCache` directory. For a crate it reads `lambda-record.yaml` beside that file and writes one catalog record per crate. `process` copies attributes from `schema/measurement.yaml`. The reader returns shape and chunk shape from the designated store's `zarr.json` and does not open chunk files. When that store is a zarr array, launch registers it with Tiled so `/api/v1/array/full/{key}` can read it.
+The extractor claims two inputs: a JSON record whose `cache` is `ProcessedCache`, and `ro-crate-metadata.json` inside a `ProcessedCache/<measurement>/` directory. For a crate it also reads `lambda-record.yaml` beside that file. The record holds the slots of `ProcessedMeasurement`; the resource id is `measurement_id`; the payload is the record file itself.
 
-Search fields are `sample_code`, `campaign`, `cache`, `kind`, and `beam_energy_kev`.
+The reader lists the measurement's data parts without opening chunks:
 
-```bash
-uv sync
-uv run pytest
-./start_all.sh --output run
-```
+- every array in the designated zarr store, and in a crate every top-level `*.zarr` store (v3 `zarr.json` or v2 `.zarray`, consolidated metadata when present). Part names are the path inside the crate with `/` replaced by `-`, e.g. `masked-clr.zarr-clr`. The `clr` array of the designated store is the designated part.
+- in a crate, side files at the top level: TIFF (array), CSV (table), YAML, PNG and text (bytes).
 
-`./start_all.sh` starts Keycloak, runs this plugin over the JSON records in `tests/fixtures`, writes the catalog database into the output directory, and serves it at `http://127.0.0.1:8000`. `--records` selects another directory of JSON records. `--output` selects where the catalog, credentials, and token are written. `.` is accepted only when the current directory is empty.
+Staging registers zarr, TIFF and CSV parts as Tiled nodes, so clients slice them on Tiled's routes; the rest are served by Tegel with HTTP Range.
 
-```bash
-curl -H "Authorization: Bearer $(cat run/token)" \
-  "http://127.0.0.1:8000/search?sample_code=AAPL-P1-leaf1"
-```
+Search fields: `sample_code`, `campaign`, `cache`, `kind`, `beam_energy_kev`.

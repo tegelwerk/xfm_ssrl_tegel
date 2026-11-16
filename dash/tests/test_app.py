@@ -102,13 +102,7 @@ def test_detail_returns_metadata_and_descriptor() -> None:
         if request.url.path == "/resources/leaf-1/data":
             return httpx.Response(
                 200,
-                json={
-                    "family": "array",
-                    "media_type": "application/zarr",
-                    "shape": [374, 573, 7],
-                    "chunks": [[64, 64, 1]],
-                    "data_type": "float64",
-                },
+                json={"parts": [_clr([374, 573, 7])]},
             )
         return httpx.Response(404, json={"detail": "missing"})
 
@@ -118,9 +112,10 @@ def test_detail_returns_metadata_and_descriptor() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["metadata"]["sample_code"] == "AAPL-P1-leaf1"
-    assert body["data"]["family"] == "array"
-    assert body["data"]["shape"] == [374, 573, 7]
-    assert body["data"]["data_type"] == "float64"
+    part = body["data"]["parts"][0]
+    assert part["family"] == "array"
+    assert part["shape"] == [374, 573, 7]
+    assert part["data_type"] == "float64"
 
 
 def test_image_is_a_png_of_the_tiled_slice() -> None:
@@ -131,15 +126,9 @@ def test_image_is_a_png_of_the_tiled_slice() -> None:
         if request.url.path == "/resources/leaf-1/data":
             return httpx.Response(
                 200,
-                json={
-                    "family": "array",
-                    "media_type": "application/zarr",
-                    "shape": [3, 4, 2],
-                    "chunks": [[3, 4, 1]],
-                    "data_type": "float64",
-                },
+                json={"parts": [_clr([3, 4, 2])]},
             )
-        if request.url.path == "/api/v1/array/full/leaf-1":
+        if request.url.path == "/api/v1/array/full/leaf-1/masked-clr.zarr-clr":
             assert request.url.params["slice"] == ":,:,1"
             assert request.url.params["format"] == "application/octet-stream"
             return httpx.Response(200, content=plane.tobytes())
@@ -196,3 +185,17 @@ def test_unknown_search_field_is_an_error() -> None:
 def _app(handler: Callable[[httpx.Request], httpx.Response]) -> FastAPI:
     http = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://data")
     return create_app(DataClient("http://data", token="test-token", client=http))
+
+
+def _clr(shape: list[int]) -> dict:
+    return {
+        "name": "masked-clr.zarr-clr",
+        "family": "array",
+        "media_type": "application/x-zarr",
+        "asset_uri": "file:///data/masked-clr.zarr/clr",
+        "designated": True,
+        "shape": shape,
+        "data_type": "float64",
+        "served_by": "tiled",
+        "content_url": "http://data/api/v1/array/full/leaf-1/masked-clr.zarr-clr",
+    }

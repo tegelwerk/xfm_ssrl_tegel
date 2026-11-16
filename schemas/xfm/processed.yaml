@@ -1,11 +1,10 @@
 id: https://w3id.org/tegel/xfm/processed
 name: processed_measurement
+version: "2"
 classes:
   ProcessedMeasurement:
     tree_root: true
     attributes:
-      key:
-        range: string
       measurement_id:
         range: string
       sample_code:
@@ -25,6 +24,4 @@ classes:
       crate_path:
         range: string
       designated:
-        range: string
-      payload_uri:
         range: string

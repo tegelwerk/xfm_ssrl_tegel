@@ -1,91 +1,147 @@
-"""Start Keycloak, catalog records with the plugin, and serve them."""
+"""Stage processed XFM records with the plugin and serve them with the reference server.
+
+``--auth keycloak`` (default) starts Keycloak in podman and configures a realm.
+``--auth dev`` signs tokens with an in-process issuer instead; use it for local work only.
+"""
 
 from __future__ import annotations
 
 import argparse
-import asyncio
+import os
 import secrets
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
 
 import httpx
 import uvicorn
 
-from tegel.core.plugins import PluginContractError, check_package
 from tegel.dataserver.app import create_app
-from tegel.dataserver.catalog import insert_record
 from tegel.dataserver.config import ServerConfig
-from tegel.xfm.dataserver import _array_directory, _array_metadata, _local_path
 
-HOST = "127.0.0.1"
-PORT = 8000
 KEYCLOAK_PORT = 8080
 KEYCLOAK_IMAGE = "quay.io/keycloak/keycloak:26.4.0"
 CONTAINER = "tegel-keycloak"
 REALM = "tegel"
 CLIENT_ID = "tegel"
 READER = "reader"
+HOST = "127.0.0.1"
+PORT = 8000
 BASE = f"http://{HOST}:{KEYCLOAK_PORT}"
+REPO = Path(__file__).resolve().parents[5]
+DATASERVER = REPO / "dataserver"
 
 
 def main() -> None:
-    """Run the plugin over a directory of records and serve the catalog."""
+    """Stage a directory of records, merge it into a fresh catalog, and serve it."""
     args = _arguments()
-    records = Path(args.records)
+    records = Path(args.records).resolve()
     output = _output_directory(Path(args.output))
-    profile = Path("schema/profile.yaml")
-    catalog = output / "catalog.db"
+    profile = Path(args.profile).resolve()
+    schema_root = Path(args.schema_root).resolve()
     if not records.is_dir():
         raise SystemExit(f"records directory not found: {records}")
     if not profile.is_file():
         raise SystemExit(f"profile not found: {profile}")
-    origin = f"http://{HOST}:{PORT}"
+    if not schema_root.is_dir():
+        raise SystemExit(f"schema root not found: {schema_root}")
+    readable = [records, *[Path(item).resolve() for item in args.readable]]
+    os.environ["TEGEL_PROFILE"] = str(profile)
+    os.environ["TEGEL_SCHEMA_ROOT"] = str(schema_root)
+    catalog = output / "catalog.db"
+    count = stage(records, output, readable, on_error=args.on_error)
+    origin = args.origin or f"http://{args.host}:{args.port}"
+    if args.auth == "dev":
+        from tegel.dataserver.testing import OIDCIssuer
+
+        issuer = OIDCIssuer(lifetime=args.token_hours * 3600)
+        with issuer as issued:
+            _serve(args, origin, output, profile, schema_root, catalog, readable, count,
+                   issuer=issued.issuer, audience=issued.audience,
+                   client_id=issued.client_id, client_secret=issued.client_secret,
+                   token=issued.token)
+        return
     creds = _credentials(output)
     print(f"Keycloak admin: {BASE}/admin  user admin", flush=True)
     print(f"Keycloak admin password: {creds['admin_password']}", flush=True)
     print(f"Reader user {READER} password: {creds['user_password']}", flush=True)
     _start_keycloak(creds["admin_password"])
-    issuer = _realm(creds)
+    issuer_url = _realm(creds)
+    _serve(args, origin, output, profile, schema_root, catalog, readable, count,
+           issuer=issuer_url, audience=CLIENT_ID, client_id=CLIENT_ID,
+           client_secret=creds["client_secret"], token=_reader_token(issuer_url, creds))
+
+
+def stage(records: Path, output: Path, readable: list[Path], *, on_error: str = "skip") -> int:
+    """Claim every record under ``records``, stage it, and merge into ``output/catalog.db``."""
+    from tegel.actions.merge import merge_staging
+    from tegel.actions.staging import claim_paths, write_staging
+
+    paths = claim_paths(records)
+    print(f"Claimed {len(paths)} record(s) under {records}", flush=True)
+    staging = output / "staging.db"
+    catalog = output / "catalog.db"
     _reset_catalog(catalog)
+    error_log = output / "errors.jsonl"
+    result = write_staging(
+        paths, staging, on_error=on_error, error_log=error_log, roots=readable
+    )
+    for error in result.errors:
+        print(f"skipped {error}", flush=True)
+    merge_staging(str(staging), str(catalog))
+    _reset_catalog(staging)
+    print(f"Staged {result.staged}, skipped {result.skipped}; errors in {error_log}", flush=True)
+    return result.staged
+
+
+def _serve(args, origin, output, profile, schema_root, catalog, readable, count, *,
+           issuer, audience, client_id, client_secret, token) -> None:
     app = create_app(
         ServerConfig(
             public_origin=origin,
             catalog_uri=f"sqlite:///{catalog.resolve()}",
-            profile_path=profile.resolve(),
+            profile_path=profile,
+            schema_root=schema_root,
             issuer_url=issuer,
-            audience=CLIENT_ID,
-            client_id=CLIENT_ID,
-            client_secret=creds["client_secret"],
+            audience=audience,
+            client_id=client_id,
+            client_secret=client_secret,
             session_secret=secrets.token_hex(32),
-            host=HOST,
-            port=PORT,
+            host=args.host,
+            port=args.port,
+            readable_storage=readable,
         )
     )
-    _grant_array_reads(app)
-    count = _catalog_records(app, records)
-    token = _reader_token(issuer, creds)
     token_path = output / "token"
     token_path.write_text(token + "\n", encoding="utf-8")
     token_path.chmod(0o600)
-    print(f"Catalogued {count} record(s) from {records}", flush=True)
-    print(f"Output directory {output}", flush=True)
+    print(f"Catalogued {count} record(s); output directory {output}", flush=True)
     print(f"Listening on {origin}", flush=True)
     print(f"Bearer token written to {token_path}", flush=True)
     print(
-        "curl -H "
-        f'"Authorization: Bearer $(cat {token_path})" '
-        f'"{origin}/search?sample_code=AAPL-P1-leaf1"',
+        f'curl -H "Authorization: Bearer $(cat {token_path})" "{origin}/search?campaign=aapl"',
         flush=True,
     )
-    uvicorn.run(app, host=HOST, port=PORT)
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="tegel-xfm")
-    parser.add_argument("--records", default="tests/fixtures")
+    parser.add_argument("--records", default=str(DATASERVER / "tests" / "fixtures"))
     parser.add_argument("--output", default=".")
+    parser.add_argument("--profile", default=str(DATASERVER / "schema" / "profile.yaml"))
+    parser.add_argument(
+        "--schema-root",
+        default=os.environ.get("TEGEL_SCHEMA_ROOT") or str(REPO / "schemas"),
+    )
+    parser.add_argument("--readable", action="append", default=[],
+                        help="extra directory Tiled may read assets from (repeatable)")
+    parser.add_argument("--auth", choices=["keycloak", "dev"], default="keycloak")
+    parser.add_argument("--token-hours", type=int, default=12, help="dev auth token lifetime")
+    parser.add_argument("--on-error", choices=["skip", "fail"], default="skip")
+    parser.add_argument("--host", default=HOST)
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--origin", default="", help="public origin, if behind a proxy")
     return parser.parse_args()
 
 
@@ -286,132 +342,6 @@ def _ensure_reader(client: httpx.Client, user_password: str) -> None:
     cleared = client.put(f"/admin/realms/{REALM}/users/{user_id}", json=profile)
     if cleared.status_code >= 400:
         raise SystemExit(f"Keycloak user setup failed: {cleared.status_code} {cleared.text}")
-
-
-def _catalog_records(app: Any, records: Path) -> int:
-    registry = app.state.tegel_registry
-    count = 0
-    print(f"Reading {records}", flush=True)
-    for path in sorted(records.rglob("*.json")):
-        if not path.is_file():
-            continue
-        try:
-            plugin = registry.extractor_for(str(path))
-        except PluginContractError:
-            print(f"skipped {path}", flush=True)
-            continue
-        package = check_package(plugin, plugin.process(str(path), {}))
-        key = str(package.metadata.get("key", ""))
-        if not key or "/" in key or "\\" in key:
-            raise SystemExit(f"{path} has no single-segment catalog key")
-        array_dir = _designated_array(package.metadata)
-        _insert_record(
-            app.state.tegel_catalog,
-            key=key,
-            metadata=package.metadata,
-            array_dir=array_dir,
-        )
-        count += 1
-        if array_dir is None:
-            print(f"catalogued {key}", flush=True)
-        else:
-            print(f"catalogued {key} from {array_dir}", flush=True)
-    if count == 0:
-        raise SystemExit(f"no processed record in {records}")
-    return count
-
-
-def _designated_array(metadata: dict[str, Any]) -> Path | None:
-    uri = metadata.get("payload_uri")
-    if not isinstance(uri, str):
-        return None
-    return _array_directory(_local_path(uri))
-
-
-def _insert_record(
-    tree: Any,
-    *,
-    key: str,
-    metadata: dict[str, Any],
-    array_dir: Path | None,
-) -> None:
-    """Write one catalog node. A zarr array is registered for Tiled to read."""
-    if array_dir is None or not _register_array(tree, key, metadata, array_dir):
-        insert_record(
-            tree,
-            key=key,
-            metadata=metadata,
-            structure_family=_family(metadata),
-        )
-
-
-def _register_array(tree: Any, key: str, metadata: dict[str, Any], array_dir: Path) -> bool:
-    import zarr
-    from tiled.mimetypes import ZARR_MIMETYPE
-    from tiled.storage import parse_storage, register_storage
-    from tiled.structures.array import ArrayStructure
-    from tiled.structures.core import StructureFamily
-    from tiled.structures.data_source import Asset, DataSource, Management
-
-    try:
-        array = zarr.open(array_dir)
-    except (OSError, ValueError):
-        return False
-    if not hasattr(array, "shape"):
-        return False
-    resolved = array_dir.resolve()
-    storage = parse_storage(resolved)
-    tree.context.readable_storage[storage.uri] = storage
-    register_storage(storage)
-    if not hasattr(tree.context, "streaming_cache"):
-        tree.context.streaming_cache = None
-    source = DataSource(
-        structure_family=StructureFamily.array,
-        structure=ArrayStructure.from_array(array),
-        mimetype=ZARR_MIMETYPE,
-        management=Management.external,
-        assets=[
-            Asset(
-                data_uri=resolved.as_uri(),
-                is_directory=True,
-                parameter="data_uri",
-                num=0,
-            )
-        ],
-    )
-
-    async def _write() -> None:
-        await tree.create_node(
-            structure_family=StructureFamily.array,
-            metadata=metadata,
-            key=key,
-            data_sources=[source],
-        )
-
-    asyncio.run(_write())
-    return True
-
-
-def _grant_array_reads(app: Any) -> None:
-    """Let the Keycloak reader call Tiled's array routes.
-
-    Keycloak issues ``scope=email profile`` and no ``scp`` claim. Tiled grants
-    the mapped scopes when ``scp`` is absent, which is what ``read:data`` needs.
-    """
-    from tiled.server.settings import get_settings
-
-    settings = app.dependency_overrides[get_settings]()
-    authenticator = getattr(settings, "authenticator", None)
-    if authenticator is None:
-        return
-    authenticator._scopes_map = {"reader": ["read:metadata", "read:data"]}
-
-
-def _family(metadata: dict[str, Any]) -> str:
-    uri = metadata.get("payload_uri")
-    if isinstance(uri, str) and _array_metadata(_local_path(uri)) is not None:
-        return "array"
-    return "bytes"
 
 
 def _reader_token(issuer: str, creds: dict[str, str]) -> str:

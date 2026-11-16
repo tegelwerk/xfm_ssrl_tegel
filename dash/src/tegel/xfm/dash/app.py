@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse
 from PIL import Image
 
 from tegel.core.client.data import DataClient, DataClientError
-from tegel.core.contracts.resources import SearchHit, StructureFamily
+from tegel.core.contracts.resources import DataPart, SearchHit, StructureFamily
 
 HOST = "127.0.0.1"
 PORT = 8001
@@ -75,7 +75,7 @@ def create_app(client: DataClient) -> FastAPI:
     def resource(resource_id: str, request: Request) -> dict[str, Any]:
         client = request.app.state.client
         found = _call(lambda: client.get(resource_id))
-        descriptor = _call(lambda: client.open_data(resource_id))
+        descriptor = _call(lambda: client.data(resource_id))
         return {
             "id": found.id,
             "uri": found.uri,
@@ -87,20 +87,18 @@ def create_app(client: DataClient) -> FastAPI:
         }
 
     @app.get("/api/resources/{resource_id}/image")
-    def image(resource_id: str, request: Request, channel: int = 0) -> Response:
+    def image(
+        resource_id: str, request: Request, channel: int = 0, part: str | None = None
+    ) -> Response:
         client = request.app.state.client
-        descriptor = _call(lambda: client.open_data(resource_id))
-        shape = list(descriptor.shape or [])
-        if descriptor.family is not StructureFamily.array or len(shape) < 2:
+        descriptor = _call(lambda: client.data(resource_id))
+        found = _image_part(descriptor.parts, part)
+        shape = list(found.shape or []) if found is not None else []
+        if found is None or len(shape) < 2:
             raise HTTPException(status_code=404, detail="This measurement has no image")
         slice_text, image_shape = _image_slice(shape, channel)
-        params = {"format": "application/octet-stream"}
-        if slice_text:
-            params["slice"] = slice_text
-        response = _get(client, f"/api/v1/array/full/{resource_id}", params)
-        if response.status_code >= 400:
-            raise HTTPException(status_code=response.status_code, detail=_http_detail(response))
-        array = _array_from_bytes(response.content, descriptor.data_type or "float64", image_shape)
+        payload = _call(lambda: client.read_array(resource_id, found, slice_text))
+        array = _array_from_bytes(payload.data, found.data_type or "float64", image_shape)
         return Response(content=_png(array), media_type="image/png")
 
     return app
@@ -236,23 +234,6 @@ def _expiry(token: str) -> int | None:
     return exp if isinstance(exp, int) else None
 
 
-def _get(client: DataClient, path: str, params: dict[str, str]) -> httpx.Response:
-    response = _once(client, path, params)
-    if response.status_code == 401 and isinstance(client, RefreshingClient):
-        client.refresh()
-        response = _once(client, path, params)
-    return response
-
-
-def _once(client: DataClient, path: str, params: dict[str, str]) -> httpx.Response:
-    return client._client.request(
-        "GET",
-        f"{client.base_url}{path}",
-        params=params,
-        headers=client._headers(),
-    )
-
-
 def _filters(params: Mapping[str, str]) -> dict[str, str]:
     return {key: value.strip() for key, value in params.items() if value.strip()}
 
@@ -266,6 +247,15 @@ def _hit(hit: SearchHit) -> dict[str, Any]:
         "date_created": hit.date_created,
         "properties": hit.properties,
     }
+
+
+def _image_part(parts: list[DataPart], name: str | None) -> DataPart | None:
+    """The named array part, else the designated one, else the first array."""
+    arrays = [item for item in parts if item.family is StructureFamily.array]
+    if name:
+        return next((item for item in arrays if item.name == name), None)
+    designated = [item for item in arrays if item.designated]
+    return (designated or arrays or [None])[0]
 
 
 def _image_slice(shape: list[int], channel: int) -> tuple[str | None, tuple[int, ...]]:

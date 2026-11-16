@@ -9,17 +9,43 @@ from urllib.parse import unquote, urlparse
 
 import yaml
 
-from tegel.core.contracts.resources import DataDescriptor, Resource, StructureFamily
-from tegel.core.contracts.types import ResourceType, linkml_attribute_names
+from tegel.core.contracts.resources import DataDescriptor, DataPart, Resource, StructureFamily
+from tegel.core.contracts.types import ResourceType
 from tegel.core.plugins import Extractor, ProcessedDataPackage
 
 SCHEMA_ID = "https://w3id.org/tegel/xfm/processed"
 
 RECORD = ResourceType(
     name="xfm.processed",
-    version="1",
+    version="2",
     metadata_schema=SCHEMA_ID,
 )
+
+# Slots of ProcessedMeasurement that the extractor fills. The schema itself lives
+# outside this package, under TEGEL_SCHEMA_ROOT.
+FIELDS = (
+    "measurement_id",
+    "sample_code",
+    "campaign",
+    "cache",
+    "kind",
+    "beam_energy_kev",
+    "acquired",
+    "technique",
+    "crate_path",
+    "designated",
+)
+
+ZARR_MEDIA_TYPE = "application/x-zarr"
+SIDE_FILES = {
+    ".tif": (StructureFamily.array, "image/tiff"),
+    ".tiff": (StructureFamily.array, "image/tiff"),
+    ".csv": (StructureFamily.table, "text/csv;header=present"),
+    ".yaml": (StructureFamily.bytes, "application/yaml"),
+    ".yml": (StructureFamily.bytes, "application/yaml"),
+    ".png": (StructureFamily.bytes, "image/png"),
+    ".txt": (StructureFamily.bytes, "text/plain"),
+}
 
 
 class ProcessedExtractor(Extractor):
@@ -27,7 +53,7 @@ class ProcessedExtractor(Extractor):
 
     @property
     def plugin_id(self) -> str:
-        return "xfm-processed-v1"
+        return "xfm-processed-v2"
 
     def validate(self, input_path: str) -> bool:
         path = Path(input_path)
@@ -38,7 +64,6 @@ class ProcessedExtractor(Extractor):
             body is not None
             and isinstance(body.get("measurement_id"), str)
             and isinstance(body.get("sample_code"), str)
-            and isinstance(body.get("key"), str)
             and body.get("cache") == "ProcessedCache"
         )
 
@@ -50,74 +75,206 @@ class ProcessedExtractor(Extractor):
             body = _object(input_path)
         if body is None:
             raise ValueError("processed measurement record is not a JSON object")
-        key = options.get("key")
-        if isinstance(key, str) and key.strip():
-            body["key"] = key
-        body["payload_uri"] = _payload_uri(body, path)
-        metadata: dict[str, Any] = {
-            "plugin_id": self.plugin_id,
-            "source_name": path.name,
-            "resource_type": RECORD.name,
-            "resource_type_version": RECORD.version,
-        }
-        for field in linkml_attribute_names(_schema()):
-            metadata[field] = body[field]
+        record = {field: _text(body.get(field)) for field in FIELDS}
+        if not record["measurement_id"]:
+            raise ValueError("measurement_id is required")
+        record["crate_path"] = record["crate_path"] or "."
+        record["designated"] = record["designated"].strip().rstrip("/")
         return ProcessedDataPackage(
             payload_path=str(path),
-            metadata=metadata,
+            record=record,
+            resource_type=RECORD.name,
+            payload_uri=path.resolve().as_uri(),
             metrics={},
         )
 
 
 class ProcessedReader:
-    """Describe the designated array from zarr metadata. Chunk files are not read."""
+    """List a measurement's parts: every zarr array in the crate, plus side files.
+
+    Shape hints come from ``zarr.json`` / ``.zarray``; no chunk is opened.
+    The designated array is the record's ``designated`` store, preferring ``clr``.
+    """
 
     @property
     def plugin_id(self) -> str:
-        return "xfm-processed-v1"
+        return "xfm-processed-v2"
 
     def validate(self, resource: Resource) -> bool:
         return resource.type == RECORD.name
 
     def describe(self, resource: Resource) -> DataDescriptor:
-        uri = resource.metadata.get("payload_uri")
-        if not isinstance(uri, str) or not uri:
+        uri = resource.payload_uri
+        if not uri:
             raise ValueError("payload_uri is required")
-        store = _local_path(uri)
-        array = _array_metadata(store)
-        if array is None:
-            return DataDescriptor(
-                family=StructureFamily.bytes,
-                media_type="application/octet-stream",
-                content_url=f"{resource.uri}/data/content",
-            )
-        shape = [int(item) for item in array["shape"]]
-        chunk = array["chunk_grid"]["configuration"]["chunk_shape"]
-        return DataDescriptor(
-            family=StructureFamily.array,
-            media_type="application/zarr",
-            shape=shape,
-            chunks=[[int(item) for item in chunk]],
-            data_type=str(array["data_type"]),
+        record_file = _local_path(uri)
+        crate_path = str(resource.metadata.get("crate_path") or "")
+        crate = _crate_dir({"crate_path": crate_path}, record_file)
+        designated = str(resource.metadata.get("designated") or "")
+        crate_mode = record_file.name == "ro-crate-metadata.json"
+        parts: list[DataPart] = []
+        stores = _zarr_stores(crate, designated, crate_mode)
+        chosen = _designated_array(stores, designated)
+        for store in stores:
+            for array_dir, header in _arrays(store):
+                name = _part_name(array_dir.relative_to(crate))
+                parts.append(
+                    DataPart(
+                        name=name,
+                        family=StructureFamily.array,
+                        media_type=ZARR_MEDIA_TYPE,
+                        asset_uri=array_dir.resolve().as_uri(),
+                        designated=array_dir == chosen,
+                        title=str(array_dir.relative_to(crate)),
+                        shape=[int(size) for size in header["shape"]],
+                    )
+                )
+        if crate_mode:
+            for side in sorted(crate.iterdir()):
+                kind = SIDE_FILES.get(side.suffix.lower())
+                if not side.is_file() or kind is None or side.name.startswith("."):
+                    continue
+                family, media_type = kind
+                parts.append(
+                    DataPart(
+                        name=_part_name(Path(side.name)),
+                        family=family,
+                        media_type=media_type,
+                        asset_uri=side.resolve().as_uri(),
+                        title=side.name,
+                    )
+                )
+        _unique(parts)
+        payload = DataPart(
+            name="payload",
+            family=StructureFamily.bytes,
+            media_type="application/json",
+            asset_uri=uri,
         )
+        return DataDescriptor(parts=parts, payload=payload)
 
 
-def _schema_path() -> Path:
-    relative = Path("schema") / "measurement.yaml"
-    if relative.is_file():
-        return relative
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "schema" / "measurement.yaml"
-        if candidate.is_file():
-            return candidate
-    raise ValueError("schema/measurement.yaml was not found")
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    return _number_string(value) if not isinstance(value, str) else value
 
 
-def _schema() -> dict[str, Any]:
-    loaded = yaml.safe_load(_schema_path().read_text(encoding="utf-8"))
-    if not isinstance(loaded, dict):
-        raise ValueError("measurement schema must be a YAML mapping")
-    return loaded
+def _crate_dir(record: dict[str, str], record_file: Path) -> Path:
+    base = record_file.parent.resolve()
+    crate = record.get("crate_path") or ""
+    if crate not in {"", "."}:
+        candidate = Path(crate)
+        if not candidate.is_absolute():
+            candidate = base / candidate
+        if candidate.is_dir():
+            return candidate.resolve()
+    return base
+
+
+def _zarr_stores(crate: Path, designated: str, crate_mode: bool) -> list[Path]:
+    """The designated store, plus every top-level ``*.zarr`` in a crate directory."""
+    stores: list[Path] = []
+    if designated:
+        candidate = crate / designated
+        if candidate.is_dir():
+            stores.append(candidate)
+    if crate_mode and crate.is_dir():
+        for found in sorted(crate.glob("*.zarr")):
+            if found.is_dir() and found not in stores:
+                stores.append(found)
+    return stores
+
+
+def _arrays(store: Path, depth: int = 3) -> list[tuple[Path, dict[str, Any]]]:
+    """Arrays in a zarr store (v3 ``zarr.json`` or v2 ``.zarray``), in path order.
+
+    Uses consolidated metadata when present, else looks ``depth`` levels down.
+    No chunk file is opened.
+    """
+    header = _zarr_header(store)
+    if header is not None and _is_array(header):
+        return [(store, header)]
+    consolidated = _consolidated(store, header)
+    if consolidated:
+        return consolidated
+    found: list[tuple[Path, dict[str, Any]]] = []
+    if depth <= 0 or not store.is_dir():
+        return found
+    for child in sorted(store.iterdir()):
+        if child.is_dir() and not child.name.startswith("."):
+            found.extend(_arrays(child, depth - 1))
+    return found
+
+
+def _zarr_header(directory: Path) -> dict[str, Any] | None:
+    for name in ("zarr.json", ".zarray", ".zgroup"):
+        path = directory / name
+        if path.is_file():
+            try:
+                body = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return None
+            if isinstance(body, dict):
+                if name == ".zarray":
+                    body.setdefault("node_type", "array")
+                return body
+    return None
+
+
+def _is_array(header: dict[str, Any]) -> bool:
+    return header.get("node_type") == "array" and "shape" in header
+
+
+def _consolidated(store: Path, header: dict[str, Any] | None) -> list[tuple[Path, dict[str, Any]]]:
+    metadata: dict[str, Any] = {}
+    v3 = (header or {}).get("consolidated_metadata")
+    if isinstance(v3, dict) and isinstance(v3.get("metadata"), dict):
+        metadata = v3["metadata"]
+    elif (store / ".zmetadata").is_file():
+        try:
+            v2 = json.loads((store / ".zmetadata").read_text(encoding="utf-8")).get("metadata", {})
+        except (OSError, json.JSONDecodeError, AttributeError):
+            v2 = {}
+        metadata = {
+            key.removesuffix("/.zarray"): {**value, "node_type": "array"}
+            for key, value in v2.items()
+            if key.endswith(".zarray") and isinstance(value, dict)
+        }
+    found = [
+        (store / key, value)
+        for key, value in sorted(metadata.items())
+        if isinstance(value, dict) and _is_array(value) and (store / key).is_dir()
+    ]
+    return found
+
+
+def _designated_array(stores: list[Path], designated: str) -> Path | None:
+    if not designated or not stores or stores[0].name != Path(designated).name:
+        return None
+    arrays = [directory for directory, _ in _arrays(stores[0])]
+    if not arrays:
+        return None
+    for directory in arrays:
+        if directory.name == "clr":
+            return directory
+    return arrays[0]
+
+
+def _part_name(relative: Path) -> str:
+    text = "-".join(relative.parts)
+    cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in text)
+    cleaned = cleaned.lstrip("._-") or "part"
+    return cleaned[:128]
+
+
+def _unique(parts: list[DataPart]) -> None:
+    seen: dict[str, int] = {}
+    for index, part in enumerate(parts):
+        count = seen.get(part.name, 0)
+        seen[part.name] = count + 1
+        if count:
+            parts[index] = part.model_copy(update={"name": f"{part.name[:120]}-{count}"})
 
 
 def _cache_name(metadata_path: Path) -> str:
@@ -242,55 +399,8 @@ def _object(input_path: str) -> dict[str, Any] | None:
     return body
 
 
-def _payload_uri(body: dict[str, Any], record: Path) -> str:
-    explicit = body.get("payload_uri")
-    if isinstance(explicit, str) and explicit.strip():
-        return explicit
-    designated = body.get("designated")
-    if not isinstance(designated, str) or not designated.strip():
-        return record.resolve().as_uri()
-    base = record.parent
-    crate = body.get("crate_path")
-    if isinstance(crate, str) and crate not in {"", "."}:
-        candidate = Path(crate)
-        if not candidate.is_absolute():
-            candidate = base / candidate
-        if candidate.is_dir():
-            base = candidate
-    return (base / designated.strip().rstrip("/")).resolve().as_uri()
-
-
 def _local_path(uri: str) -> Path:
     parsed = urlparse(uri)
     if parsed.scheme == "file":
         return Path(unquote(parsed.path))
     return Path(uri)
-
-
-def _array_directory(store: Path) -> Path | None:
-    """Return the directory of the designated array inside a zarr store."""
-    if store.is_file():
-        return None
-    preferred = store / "clr" / "zarr.json"
-    paths = [preferred] if preferred.is_file() else []
-    if store.is_dir():
-        paths.extend(sorted(store.rglob("zarr.json")))
-    seen: set[Path] = set()
-    for path in paths:
-        if path in seen or not path.is_file():
-            continue
-        seen.add(path)
-        body = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(body, dict) and body.get("node_type") == "array" and "shape" in body:
-            return path.parent
-    return None
-
-
-def _array_metadata(store: Path) -> dict[str, Any] | None:
-    directory = _array_directory(store)
-    if directory is None:
-        return None
-    body = json.loads((directory / "zarr.json").read_text(encoding="utf-8"))
-    if isinstance(body, dict) and body.get("node_type") == "array" and "shape" in body:
-        return body
-    return None

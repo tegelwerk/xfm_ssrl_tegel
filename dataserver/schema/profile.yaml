@@ -1,6 +1,9 @@
 id: https://w3id.org/tegel/xfm/processed/profile
 name: processed measurements
-schema: measurement.yaml
+schema_id: https://w3id.org/tegel/xfm/processed
+schema_version: "2"
+schema_path: xfm/processed.yaml
+class: ProcessedMeasurement
 search:
   - sample_code
   - campaign
