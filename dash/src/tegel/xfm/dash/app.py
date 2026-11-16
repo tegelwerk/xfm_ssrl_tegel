@@ -280,6 +280,7 @@ def _array_from_bytes(payload: bytes, data_type: str, shape: tuple[int, ...]) ->
 
 
 def _png(array: numpy.ndarray) -> bytes:
+    array = array.astype(numpy.float64, copy=False)
     finite = array[numpy.isfinite(array)]
     if finite.size == 0:
         scaled = numpy.zeros(array.shape, dtype=numpy.uint8)
