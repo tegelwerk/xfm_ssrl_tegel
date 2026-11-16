@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start Keycloak, catalog processed records with the plugin, and serve them.
+# Stage processed records with the plugin and serve them. Pass --auth dev to skip Keycloak.
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 exec uv run tegel-xfm "$@"

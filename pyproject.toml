@@ -17,6 +17,8 @@ members = ["dataserver", "dash", "actions"]
 [tool.uv.sources]
 tegel-core = { path = "../tegel/tegel-core", editable = true }
 tegel-dataserver = { path = "../tegel/tegel-base/packages/dataserver", editable = true }
+tegel-actions = { path = "../tegel/tegel-base/packages/actions", editable = true }
+tegel-register = { path = "../tegel/tegel-register", editable = true }
 tegel-xfm = { workspace = true }
 tegel-xfm-dash = { workspace = true }
 tegel-xfm-actions = { workspace = true }
@@ -27,18 +29,20 @@ dev = [
     "tegel-xfm-dash",
     "tegel-xfm-actions",
     "tegel-dataserver",
+    "tegel-actions",
     "pytest>=8",
     "ruff>=0.8",
     "httpx",
+    "zarr",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["dataserver/tests", "dash/tests"]
+testpaths = ["dataserver/tests", "actions/tests", "dash/tests"]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["dataserver/src", "dataserver/tests", "dash/src", "dash/tests", "actions/src"]
+src = ["dataserver/src", "dataserver/tests", "dash/src", "dash/tests", "actions/src", "actions/tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
