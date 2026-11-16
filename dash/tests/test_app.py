@@ -199,3 +199,9 @@ def _clr(shape: list[int]) -> dict:
         "served_by": "tiled",
         "content_url": "http://data/api/v1/array/full/leaf-1/masked-clr.zarr-clr",
     }
+
+
+def test_boolean_mask_renders() -> None:
+    from tegel.xfm.dash.app import _png
+
+    assert _png(numpy.array([[True, False], [False, True]])).startswith(b"\x89PNG")
