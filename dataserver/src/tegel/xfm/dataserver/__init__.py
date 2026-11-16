@@ -12,18 +12,20 @@ import yaml
 from tegel.core.contracts.resources import DataDescriptor, DataPart, Resource, StructureFamily
 from tegel.core.contracts.types import ResourceType
 from tegel.core.plugins import Extractor, ProcessedDataPackage
+from tegel.xfm.dataserver.typeid import derive, is_typeid
 
 SCHEMA_ID = "https://w3id.org/tegel/xfm/processed"
 
 RECORD = ResourceType(
     name="xfm.processed",
-    version="2",
+    version="3",
     metadata_schema=SCHEMA_ID,
 )
 
 # Slots of ProcessedMeasurement that the extractor fills. The schema itself lives
 # outside this package, under TEGEL_SCHEMA_ROOT.
 FIELDS = (
+    "id",
     "measurement_id",
     "sample_code",
     "campaign",
@@ -53,7 +55,7 @@ class ProcessedExtractor(Extractor):
 
     @property
     def plugin_id(self) -> str:
-        return "xfm-processed-v2"
+        return "xfm-processed-v3"
 
     def validate(self, input_path: str) -> bool:
         path = Path(input_path)
@@ -78,6 +80,8 @@ class ProcessedExtractor(Extractor):
         record = {field: _text(body.get(field)) for field in FIELDS}
         if not record["measurement_id"]:
             raise ValueError("measurement_id is required")
+        if not is_typeid(record["id"]):
+            record["id"] = derive(record["measurement_id"])
         record["crate_path"] = record["crate_path"] or "."
         record["designated"] = record["designated"].strip().rstrip("/")
         return ProcessedDataPackage(
@@ -98,7 +102,7 @@ class ProcessedReader:
 
     @property
     def plugin_id(self) -> str:
-        return "xfm-processed-v2"
+        return "xfm-processed-v3"
 
     def validate(self, resource: Resource) -> bool:
         return resource.type == RECORD.name
@@ -303,14 +307,21 @@ def _record_from_crate(metadata_path: Path) -> dict[str, Any]:
         loaded = yaml.safe_load(fuller_path.read_text(encoding="utf-8"))
         if isinstance(loaded, dict):
             fuller = loaded
-    measurement_id = crate_dir.name
+    folder = crate_dir.name
+    if is_typeid(folder):
+        name = root.get("name")
+        measurement_id = name if isinstance(name, str) and name.strip() else folder
+        typeid = folder
+    else:
+        measurement_id = folder
+        typeid = derive(folder)
     sample_code = root.get("sample_code")
     sample_code = sample_code if isinstance(sample_code, str) else ""
     technique = root.get("technique")
     graph = _object(str(metadata_path))
     entities = graph.get("@graph") if isinstance(graph, dict) else []
     return {
-        "key": f"ProcessedCache--{measurement_id}",
+        "id": typeid,
         "measurement_id": measurement_id,
         "sample_code": sample_code,
         "campaign": _campaign(sample_code, measurement_id),

@@ -17,6 +17,7 @@ from tegel.dataserver.config import ServerConfig
 from tegel.dataserver.testing import OIDCIssuer, assert_incarnation
 from tegel.xfm.actions.serve import _output_directory, stage
 from tegel.xfm.dataserver import ProcessedReader
+from tegel.xfm.dataserver.typeid import derive, is_typeid
 
 PACKAGE = Path(__file__).resolve().parents[2] / "dataserver"
 FIXTURES = PACKAGE / "tests" / "fixtures"
@@ -24,6 +25,7 @@ FIXTURE = FIXTURES / "processed-leaf.json"
 PROFILE = PACKAGE / "schema" / "profile.yaml"
 SCHEMA_ROOT = PACKAGE.parent / "schemas"
 ORIGIN = "http://testserver"
+AAPL = derive("aapl-P1-leaf1-10serp")
 CLR = np.arange(4 * 5 * 3, dtype="float64").reshape(4, 5, 3)
 
 
@@ -33,7 +35,9 @@ def _spec_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEGEL_SCHEMA_ROOT", str(SCHEMA_ROOT))
 
 
-def write_crate(root: Path, measurement_id: str = "aapl-P1-leaf1-10serp") -> Path:
+def write_crate(
+    root: Path, measurement_id: str = "aapl-P1-leaf1-10serp", name: str | None = None
+) -> Path:
     """A ProcessedCache crate with a chunked clr array, a mask, a table and a record."""
     import zarr
 
@@ -54,6 +58,7 @@ def write_crate(root: Path, measurement_id: str = "aapl-P1-leaf1-10serp") -> Pat
                 "@graph": [
                     {
                         "@id": "./",
+                        **({"name": name} if name else {}),
                         "sample_code": "AAPL-P1-leaf1",
                         "technique": "xrf",
                         "dateCreated": "2024-05-01T00:00:00Z",
@@ -89,6 +94,8 @@ def test_processed_cache_crate_becomes_a_record(tmp_path: Path) -> None:
     assert package.payload_uri.endswith("ro-crate-metadata.json")
     record = package.record
     assert record["measurement_id"] == "aapl-P1-leaf1-10serp"
+    assert record["id"] == AAPL
+    assert is_typeid(record["id"])
     assert record["sample_code"] == "AAPL-P1-leaf1"
     assert record["campaign"] == "aapl"
     assert record["kind"] == "mca_fit"
@@ -97,17 +104,43 @@ def test_processed_cache_crate_becomes_a_record(tmp_path: Path) -> None:
     assert record["designated"] == "masked-clr.zarr"
 
 
+def test_typeid_matches_the_spec_vector() -> None:
+    import uuid
+
+    from tegel.xfm.dataserver.typeid import decode, encode
+
+    known = uuid.UUID("0188bac7-4afa-78aa-bc3b-bd1eef28d881")
+    assert encode("prefix", known) == "prefix_01h2xcejqtf2nbrexx3vqjhp41"
+    assert decode("prefix_01h2xcejqtf2nbrexx3vqjhp41") == ("prefix", known)
+    assert derive("aapl-P1-leaf1-10serp") == AAPL
+    assert AAPL.startswith("xfm_") and len(AAPL) == 30
+    assert not is_typeid("xfm_8zzzzzzzzzzzzzzzzzzzzzzzzz")
+    assert not is_typeid("other_01h2xcejqtf2nbrexx3vqjhp41")
+
+
+def test_typeid_folder_is_the_id_and_the_crate_name_is_kept(tmp_path: Path) -> None:
+    folder = derive("some-new-scan")
+    metadata = write_crate(tmp_path, folder, name="radish-leaf3-roi")
+    record = Registry().extractor_for(str(metadata)).process(str(metadata), {}).record
+    assert record["id"] == folder
+    assert record["measurement_id"] == "radish-leaf3-roi"
+    assert record["campaign"] == "aapl"
+    no_name = write_crate(tmp_path / "b", folder)
+    record = Registry().extractor_for(str(no_name)).process(str(no_name), {}).record
+    assert record["measurement_id"] == folder
+
+
 def test_entry_point_claims_only_processed_records(tmp_path: Path) -> None:
     registry = Registry()
     plugin = registry.extractor_for(str(FIXTURE))
-    assert plugin.plugin_id == "xfm-processed-v2"
+    assert plugin.plugin_id == "xfm-processed-v3"
     assert registry.resource_types()["xfm.processed"].metadata_schema.endswith("/processed")
     other = tmp_path / "note.json"
     other.write_text(json.dumps({"cache": "DataCache", "key": "x"}), encoding="utf-8")
     assert plugin.validate(str(other)) is False
     package = plugin.process(str(FIXTURE), {})
     assert set(package.record) <= {
-        "measurement_id", "sample_code", "campaign", "cache", "kind",
+        "id", "measurement_id", "sample_code", "campaign", "cache", "kind",
         "beam_energy_kev", "acquired", "technique", "crate_path", "designated",
     }
 
@@ -116,7 +149,7 @@ def test_reader_lists_arrays_and_side_files(tmp_path: Path) -> None:
     metadata = write_crate(tmp_path)
     package = Registry().extractor_for(str(metadata)).process(str(metadata), {})
     resource = Resource(
-        id="x", uri="urn:x", type="xfm.processed", type_version="2",
+        id="x", uri="urn:x", type="xfm.processed", type_version="3",
         metadata=package.record, payload_uri=package.payload_uri,
     )
     descriptor = ProcessedReader().describe(resource)
@@ -133,7 +166,7 @@ def test_reader_lists_arrays_and_side_files(tmp_path: Path) -> None:
 def test_reader_on_legacy_record_fixture() -> None:
     package = Registry().extractor_for(str(FIXTURE)).process(str(FIXTURE), {})
     resource = Resource(
-        id="x", uri="urn:x", type="xfm.processed", type_version="2",
+        id="x", uri="urn:x", type="xfm.processed", type_version="3",
         metadata=package.record, payload_uri=package.payload_uri,
     )
     descriptor = ProcessedReader().describe(resource)
@@ -190,7 +223,7 @@ def test_xfm_incarnation_conforms(served: Served) -> None:
         base_url=ORIGIN,
         token=served.token,
         http_client=served.http,
-        resource_id="aapl-P1-leaf1-10serp",
+        resource_id=AAPL,
         search_field="campaign",
         search_value="aapl",
         positive_fixture=served.records
@@ -205,10 +238,10 @@ def test_search_and_slice_the_designated_array(served: Served) -> None:
 
     with DataClient(ORIGIN, token=served.token, client=served.http) as client:
         assert client.search({"kind": "sulfur_edge"}).count == 1
-        payload = client.read_array("aapl-P1-leaf1-10serp", "masked-clr.zarr-clr", "1:3,2,0")
+        payload = client.read_array(AAPL, "masked-clr.zarr-clr", "1:3,2,0")
     got = np.frombuffer(payload.data, dtype="float64")
     assert got.tolist() == CLR[1:3, 2, 0].tolist()
-    data = served.get("/resources/aapl-P1-leaf1-10serp/data").json()
+    data = served.get(f"/resources/{AAPL}/data").json()
     clr = next(part for part in data["parts"] if part["designated"])
     assert clr["served_by"] == "tiled"
     assert clr["shape"] == [4, 5, 3]

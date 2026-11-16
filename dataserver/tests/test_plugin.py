@@ -22,8 +22,9 @@ def test_fixture_record_and_parts(monkeypatch: pytest.MonkeyPatch) -> None:
     plugin = Registry().extractor_for(str(FIXTURE))
     package = plugin.process(str(FIXTURE), {})
     assert package.record["measurement_id"] == "aapl-P1-leaf1-10serp"
+    assert package.record["id"].startswith("xfm_")
     resource = Resource(
-        id="x", uri="urn:x", type="xfm.processed", type_version="2",
+        id="x", uri="urn:x", type="xfm.processed", type_version="3",
         metadata=package.record, payload_uri=package.payload_uri,
     )
     descriptor = ProcessedReader().describe(resource)

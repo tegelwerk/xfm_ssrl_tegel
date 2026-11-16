@@ -31,9 +31,9 @@ Open <http://127.0.0.1:8001>. From the command line:
 ```bash
 T=$(cat run/token)
 curl -H "Authorization: Bearer $T" "http://127.0.0.1:8000/search?campaign=aapl"
-curl -H "Authorization: Bearer $T" "http://127.0.0.1:8000/resources/<measurement_id>/data"
+curl -H "Authorization: Bearer $T" "http://127.0.0.1:8000/resources/<id>/data"
 curl -H "Authorization: Bearer $T" \
-  "http://127.0.0.1:8000/api/v1/array/full/<measurement_id>/masked-clr.zarr-clr?slice=:,:,0&format=application/json"
+  "http://127.0.0.1:8000/api/v1/array/full/<id>/masked-clr.zarr-clr?slice=:,:,0&format=application/json"
 ```
 
 The data server and the dashboard are separate processes and can run on **different machines**. The dashboard needs network access to the server and a copy of `run/token`, and its `--server` must equal the server's public origin (`--origin`). An SSH tunnel is the simplest setup (manual §7).
@@ -45,13 +45,15 @@ The data server and the dashboard are separate processes and can run on **differ
 ```
 /path/to/caches/
 └── ProcessedCache/
-    └── <measurement_id>/
+    └── <name or TypeID>/            folder name; see "Measurement ids" below
         ├── ro-crate-metadata.json     root "@id": "./" with sample_code, technique, dateCreated;
         │                              one entity with "isDesignated": true (e.g. masked-clr.zarr/)
         ├── lambda-record.yaml         optional: beam_energy_keV, experiment_runs
         ├── *.zarr/                    every array becomes a sliceable part (v2 or v3)
         └── *.csv, *.tif, *.png, ...   side files become parts too
 ```
+
+Measurement ids are [TypeIDs](https://github.com/jetify-com/typeid) with prefix `xfm`, e.g. `xfm_3cwwyaqehzby5v83bnypw4mac6`. If a crate folder is named with an `xfm_` TypeID, that is the id. Otherwise the id is derived deterministically from the folder name (UUIDv5), so it is stable across restarts without writing into the data. The readable name is kept as `measurement_id`. Manual §4.2 has the details.
 
 Search fields: `sample_code`, `campaign`, `cache`, `kind`, `beam_energy_kev` (exact match).
 

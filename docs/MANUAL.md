@@ -121,7 +121,7 @@ Stop either process with Ctrl-C.
 ```
 DIR/
 └── ProcessedCache/                       ← the parent folder must be named exactly this
-    ├── aapl-P1-leaf1-10serp/             ← folder name becomes measurement_id
+    ├── aapl-P1-leaf1-10serp/             ← folder name: a readable name, or a TypeID (4.2)
     │   ├── ro-crate-metadata.json        ← required; must contain a root entity "@id": "./"
     │   ├── lambda-record.yaml            ← optional; beam energy, experiment date
     │   ├── masked-clr.zarr/              ← zarr store(s)
@@ -135,13 +135,31 @@ DIR/
 
 Other folders under `DIR` (for example `DataCache/`) are ignored.
 
-**B. Stand-alone JSON records**: any `*.json` with `"cache": "ProcessedCache"` and string fields `measurement_id` and `sample_code`. Its zarr store is found from `designated`, relative to the JSON file or to `crate_path`. The fixture `dataserver/tests/fixtures/processed-leaf.json` is an example.
+**B. Stand-alone JSON records**: any `*.json` with `"cache": "ProcessedCache"` and string fields `measurement_id` and `sample_code`. An `id` field is used if it is a valid `xfm_` TypeID; otherwise the id is derived from `measurement_id`. Its zarr store is found from `designated`, relative to the JSON file or to `crate_path`. The fixture `dataserver/tests/fixtures/processed-leaf.json` is an example.
 
-### 4.2 How record fields are filled (crate mode)
+### 4.2 Measurement ids (TypeID)
+
+Every measurement's unique id is a [TypeID](https://github.com/jetify-com/typeid) with prefix `xfm`, for example `xfm_3cwwyaqehzby5v83bnypw4mac6`. The id is used in every URL (`/resources/<id>`, `/api/v1/array/full/<id>/…`). The readable name is kept separately in `measurement_id`.
+
+- **Folder named with a TypeID** (`ProcessedCache/xfm_01h…/`, the preferred layout for new data): the folder name is the id. The readable `measurement_id` is the crate root's `name` in `ro-crate-metadata.json`, or the folder name if there is no `name`.
+- **Any other folder name** (`ProcessedCache/aapl-P1-leaf1-10serp/`): the id is derived from the folder name, as the TypeID of a version-5 UUID of that name in a fixed XFM namespace. The folder name becomes `measurement_id`.
+
+Derived ids are deterministic: the same folder name gives the same id at every restart and on every machine, and nothing is written into the data. Renaming a folder changes its id. Two crates with the same folder name in different trees get the same id, and staging logs the second as `duplicate`.
+
+To get the id for a folder name:
+
+```bash
+uv run python -c "from tegel.xfm.dataserver.typeid import derive; print(derive('aapl-P1-leaf1-10serp'))"
+```
+
+The derived suffix encodes a version-5 UUID rather than the version 7 the TypeID spec prefers, so derived ids are not sortable by time. Any TypeID tool decodes them.
+
+### 4.3 How record fields are filled (crate mode)
 
 | Field | Source |
 | --- | --- |
-| `measurement_id` | crate folder name |
+| `id` | the folder name if it is an `xfm_` TypeID, else derived from the folder name (4.2) |
+| `measurement_id` | the crate folder name; for a TypeID folder, the root `name` |
 | `sample_code` | root entity `sample_code` in `ro-crate-metadata.json` (empty if missing) |
 | `campaign` | `aapl` if the sample code starts with `AAPL` or the id starts with `aapl-`; `radish-germ` if the sample code contains `Germ` or the id starts with `radish-germ`; otherwise `radish` |
 | `kind` | `mca_fit` for `aapl-*`; `sulfur_edge` if the id contains `sulfur-edge`; otherwise `roi_map` |
@@ -153,7 +171,7 @@ Other folders under `DIR` (for example `DataCache/`) are ignored.
 
 The `campaign` and `kind` rules are specific to the current AAPL/radish datasets. For a new campaign, edit `_campaign` and `_kind` in `dataserver/src/tegel/xfm/dataserver/__init__.py`.
 
-### 4.3 What becomes a data part
+### 4.4 What becomes a data part
 
 For each measurement, the server lists named **parts**:
 
@@ -163,7 +181,7 @@ For each measurement, the server lists named **parts**:
 
 Arrays, TIFFs and CSVs are registered with Tiled, so you can slice them. Byte parts are served by Tegel with HTTP Range. Chunks are never read during startup, only headers.
 
-### 4.4 Run it
+### 4.5 Run it
 
 ```bash
 uv run tegel-xfm --auth dev --records /data/xfm/caches --output ~/xfm-run
@@ -173,7 +191,7 @@ uv run tegel-xfm --auth dev --records /data/xfm/caches --output ~/xfm-run
 - Every start **rebuilds the catalog from scratch**. To pick up new crates, restart the server.
 - If arrays live outside `--records` (for example `crate_path` points elsewhere), add `--readable /other/dir`. Tiled refuses to read files outside readable directories.
 
-### 4.5 Bad records
+### 4.6 Bad records
 
 By default a record that fails is skipped and logged (`--on-error skip`). Use `--on-error fail` to stop at the first bad record. Inspect the log with:
 
@@ -190,8 +208,8 @@ Each line gives the stage where the record failed. The viewer's `--stage` filter
 | `process` | the extractor could not read the record |
 | `check` | the record does not match the schema |
 | `parts` | a part is missing, unreadable by Tiled, or outside readable storage |
-| `id` | no `measurement_id` |
-| `duplicate` | two records with the same `measurement_id` |
+| `id` | no id could be built (empty `measurement_id`) |
+| `duplicate` | two records with the same id, e.g. the same folder name in two trees |
 | `write` | the catalog write failed |
 
 The extractor is lenient: a crate with no `sample_code` still loads, with empty fields. Check the dashboard for blank sample codes after your first real run.
@@ -237,10 +255,11 @@ S=http://127.0.0.1:8000
 
 ```bash
 curl -H "$H" $S/capabilities                       # spec version, plugins, search fields
-curl -H "$H" $S/resources                          # every measurement id
+curl -H "$H" $S/resources                          # every measurement id (TypeID)
 curl -H "$H" "$S/search?campaign=aapl&kind=mca_fit" # RO-Crate JSON-LD of hits
-curl -H "$H" $S/resources/aapl-P1-leaf1-10serp/metadata
-curl -H "$H" $S/resources/aapl-P1-leaf1-10serp/data # parts, each with content_url
+ID=$(uv run python -c "from tegel.xfm.dataserver.typeid import derive; print(derive('aapl-P1-leaf1-10serp'))")
+curl -H "$H" $S/resources/$ID/metadata
+curl -H "$H" $S/resources/$ID/data               # parts, each with content_url
 ```
 
 Search works only on `sample_code`, `campaign`, `cache`, `kind` and `beam_energy_kev`, by exact match. Any other field returns `400 Unknown search field`.
@@ -250,7 +269,7 @@ Search works only on `sample_code`, `campaign`, `cache`, `kind` and `beam_energy
 Use the `content_url` from `/data` as the base URL for each part:
 
 ```bash
-ID=aapl-P1-leaf1-10serp
+# $ID from 6.1 (or copy an id from /resources or the dashboard)
 
 # array slice as JSON (numpy slice syntax, no spaces)
 curl -H "$H" "$S/api/v1/array/full/$ID/masked-clr.zarr-clr?slice=0:10,:,2&format=application/json"
@@ -435,6 +454,7 @@ The image installs the exact versions in `uv.lock`, via `deploy/constraints.txt`
 | Path | Contents |
 | --- | --- |
 | `dataserver/src/tegel/xfm/dataserver/__init__.py` | extractor (record fields), reader (parts), resource type |
+| `dataserver/src/tegel/xfm/dataserver/typeid.py` | TypeID encode/decode and the deterministic `derive(name)` |
 | `dataserver/schema/profile.yaml` | search fields, displayed properties, id field; names the schema |
 | `schemas/xfm/processed.yaml` | LinkML schema `ProcessedMeasurement` (v2) |
 | `actions/src/tegel/xfm/actions/serve.py` | the `tegel-xfm` launcher |

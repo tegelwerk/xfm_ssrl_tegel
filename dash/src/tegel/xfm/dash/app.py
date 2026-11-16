@@ -40,6 +40,7 @@ FIELDS = (
 )
 COLUMNS = (
     "measurement_id",
+    "id",
     "sample_code",
     "campaign",
     "kind",

@@ -1,7 +1,7 @@
 id: https://w3id.org/tegel/xfm/processed/profile
 name: processed measurements
 schema_id: https://w3id.org/tegel/xfm/processed
-schema_version: "2"
+schema_version: "3"
 schema_path: xfm/processed.yaml
 class: ProcessedMeasurement
 search:
@@ -11,6 +11,7 @@ search:
   - kind
   - beam_energy_kev
 properties:
+  - id
   - measurement_id
   - sample_code
   - campaign
@@ -22,5 +23,5 @@ properties:
   - designated
 entity:
   name: measurement_id
-  identifier: measurement_id
+  identifier: id
   dateCreated: acquired

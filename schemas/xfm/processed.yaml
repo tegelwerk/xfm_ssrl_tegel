@@ -1,11 +1,16 @@
 id: https://w3id.org/tegel/xfm/processed
 name: processed_measurement
-version: "2"
+version: "3"
 classes:
   ProcessedMeasurement:
     tree_root: true
     attributes:
+      id:
+        range: string
+        description: TypeID (prefix xfm), unique; the folder name when it is a TypeID, else derived from it
       measurement_id:
+        range: string
+        description: readable name; the crate folder name, or the crate's name when the folder is a TypeID
         range: string
       sample_code:
         range: string
