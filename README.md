@@ -13,7 +13,7 @@ It serves processed XFM measurements (RO-Crates under `ProcessedCache/`) as a se
 mkdir -p ~/tegelwerk && cd ~/tegelwerk
 git clone https://github.com/tegelwerk/tegel
 git clone https://github.com/tegelwerk/xfm_ssrl_tegel
-cd xfm_ssrl_tegel && git checkout port-spec-0.4     # until PR #1 is merged
+cd xfm_ssrl_tegel
 
 # 2. install and verify
 uv sync --group dev

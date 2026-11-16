@@ -2,7 +2,7 @@
 
 This manual takes you from a fresh machine to a running XFM data server and dashboard, and then covers day-to-day use: loading your own data, querying it, reading arrays, and fixing common problems.
 
-Everything here was run against the `port-spec-0.4` branch of `xfm_ssrl_tegel` with `tegel` at `main`. Two parts are marked as untested: Keycloak mode and the container image.
+Everything here was run against `main` of both `xfm_ssrl_tegel` and `tegel`. Two parts are marked as untested: Keycloak mode and the container image.
 
 ---
 
@@ -45,7 +45,6 @@ mkdir -p ~/tegelwerk && cd ~/tegelwerk
 git clone https://github.com/tegelwerk/tegel
 git clone https://github.com/tegelwerk/xfm_ssrl_tegel
 cd xfm_ssrl_tegel
-git checkout port-spec-0.4        # until PR #1 is merged into main
 ```
 
 Result:
