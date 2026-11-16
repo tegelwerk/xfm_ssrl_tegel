@@ -1,24 +1,39 @@
+# Image for the SSRL XFM data server and the Tegel pipeline workers.
+# Build context: the directory that contains both checkouts, tegel/ and xfm_ssrl_tegel/
+#   docker build -f xfm_ssrl_tegel/Containerfile -t tegel-dataserver:local .
+# Only package metadata and src/ are copied, so no ignore file is needed (the context
+# directory belongs to neither repository). Third-party versions are pinned by
+# deploy/constraints.txt, exported from uv.lock.
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
     UV_HTTP_TIMEOUT=300
 RUN pip install --no-cache-dir uv hatchling
 
 WORKDIR /src
-COPY tegel/tegel-core /src/tegel-core
-COPY tegel/tegel-register /src/tegel-register
-COPY tegel/tegel-base/packages/dataserver /src/tegel-base/packages/dataserver
-COPY tegel/tegel-base/packages/actions /src/tegel-base/packages/actions
-COPY xfm_ssrl_tegel/dataserver /src/xfm/dataserver
+COPY tegel/tegel-core/pyproject.toml tegel/tegel-core/README.md tegel/tegel-core/LICENSE /src/tegel-core/
+COPY tegel/tegel-core/src /src/tegel-core/src
+COPY tegel/tegel-register/pyproject.toml tegel/tegel-register/README.md tegel/tegel-register/LICENSE /src/tegel-register/
+COPY tegel/tegel-register/src /src/tegel-register/src
+COPY tegel/tegel-base/packages/dataserver/pyproject.toml tegel/tegel-base/packages/dataserver/README.md tegel/tegel-base/packages/dataserver/LICENSE /src/dataserver/
+COPY tegel/tegel-base/packages/dataserver/src /src/dataserver/src
+COPY tegel/tegel-base/packages/actions/pyproject.toml tegel/tegel-base/packages/actions/README.md tegel/tegel-base/packages/actions/LICENSE /src/actions/
+COPY tegel/tegel-base/packages/actions/src /src/actions/src
+COPY xfm_ssrl_tegel/dataserver/pyproject.toml xfm_ssrl_tegel/dataserver/README.md xfm_ssrl_tegel/dataserver/LICENSE /src/xfm/dataserver/
+COPY xfm_ssrl_tegel/dataserver/src /src/xfm/dataserver/src
+COPY xfm_ssrl_tegel/dataserver/schema /src/xfm/dataserver/schema
 COPY xfm_ssrl_tegel/schemas /schemas
+COPY xfm_ssrl_tegel/deploy/constraints.txt /src/constraints.txt
 
-WORKDIR /src/xfm/dataserver
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system --no-build-isolation --no-sources \
+    find /src -name __pycache__ -prune -exec rm -rf {} + \
+    && uv pip install --system --no-build-isolation --no-sources \
+    --constraint /src/constraints.txt \
     /src/tegel-core \
     "/src/tegel-register[tiled]" \
-    /src/tegel-base/packages/dataserver \
-    /src/tegel-base/packages/actions \
+    /src/dataserver \
+    /src/actions \
     /src/xfm/dataserver
 
 ENV TEGEL_SCHEMA_ROOT=/schemas \

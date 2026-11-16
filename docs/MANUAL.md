@@ -2,7 +2,7 @@
 
 This manual takes you from a fresh machine to a running XFM data server and dashboard, and then covers day-to-day use: loading your own data, querying it, reading arrays, and fixing common problems.
 
-Everything here was run against `main` of both `xfm_ssrl_tegel` and `tegel`. Two parts are marked as untested: Keycloak mode and the container image.
+Everything here was run against `main` of both `xfm_ssrl_tegel` and `tegel`. Two parts are marked as untested: Keycloak mode, and the full edge stack (Keycloak, Caddy, Prefect) around the container image.
 
 ---
 
@@ -406,7 +406,7 @@ For a shared server with HTTPS, Keycloak, Prefect-driven ingest and incremental 
 - `TEGEL_SCHEMA_ROOT=~/tegelwerk/xfm_ssrl_tegel/schemas`
 - `TEGEL_RECORDS=` your caches directory
 
-The container image build has not been tested on this branch.
+The image installs the exact versions in `uv.lock`, via `deploy/constraints.txt`. After changing `uv.lock`, run `deploy/export-constraints.sh`; a test fails if the two disagree. The image has been built, and its data server and staging tested, with the compose environment and mounts. The full stack with Keycloak, Caddy and Prefect has not been run yet.
 
 ---
 

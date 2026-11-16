@@ -64,7 +64,7 @@ Search fields: `sample_code`, `campaign`, `cache`, `kind`, `beam_energy_kev` (ex
 | `schemas/xfm/processed.yaml` | LinkML schema `ProcessedMeasurement` v2; point `TEGEL_SCHEMA_ROOT` here |
 | `actions/` | `tegel-xfm`: stage records and serve them with the reference data server |
 | `dash/` | `tegel-xfm-dash`: search page and image preview |
-| `Containerfile` | image used by the edge deployment in `../tegel/tegel-base/deploy` |
+| `Containerfile` | image used by the edge deployment in `../tegel/tegel-base/deploy`; pinned by `deploy/constraints.txt` |
 | `docs/MANUAL.md` | operator manual |
 
 `tegel-core`, `tegel-register`, the reference data server and the base actions come from `../tegel` as editable path sources.
@@ -80,6 +80,6 @@ uv run ruff check .
 
 ## Known gaps
 
-- Keycloak mode and the container build have not been run end to end on this branch.
+- Keycloak mode and the full edge stack (Keycloak, Caddy, Prefect) have not been run end to end. The container image itself is built and its data server tested.
 - Tiled's Python client (`tiled.client.from_uri`) cannot use the bearer token yet. Use `tegel.core.client.data.DataClient` or HTTP (manual §6.3).
 - The catalog is rebuilt at every start; there is no incremental ingest locally. The edge deployment has it.
