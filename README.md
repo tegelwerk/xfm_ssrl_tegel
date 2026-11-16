@@ -4,7 +4,7 @@ The SSRL X-ray fluorescence microscopy (XFM) incarnation of [Tegel](https://gith
 
 It serves processed XFM measurements (RO-Crates under `ProcessedCache/`) as a searchable, read-only catalog. You can slice each measurement's zarr arrays, CSV tables and TIFFs over HTTP through Tiled. A small dashboard lets you search the catalog and preview images.
 
-**→ Full walkthrough: [docs/MANUAL.md](docs/MANUAL.md)**, covering setup, loading your data, the dashboard, curl and Python access, authentication, remote access and troubleshooting.
+**→ Full walkthrough: [docs/MANUAL.md](docs/MANUAL.md)**, covering setup, loading your data, the dashboard, curl and Python access, authentication, running the server and dashboard on different machines, and troubleshooting.
 
 ## Quick start
 
@@ -35,6 +35,8 @@ curl -H "Authorization: Bearer $T" "http://127.0.0.1:8000/resources/<measurement
 curl -H "Authorization: Bearer $T" \
   "http://127.0.0.1:8000/api/v1/array/full/<measurement_id>/masked-clr.zarr-clr?slice=:,:,0&format=application/json"
 ```
+
+The data server and the dashboard are separate processes and can run on **different machines**. The dashboard needs network access to the server and a copy of `run/token`, and its `--server` must equal the server's public origin (`--origin`). An SSH tunnel is the simplest setup (manual §7).
 
 `--auth dev` needs no Keycloak and is for local use only. Leave it off to run Keycloak in podman (see manual §8).
 

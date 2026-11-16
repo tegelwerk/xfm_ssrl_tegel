@@ -23,6 +23,8 @@ In Keycloak mode a third process runs: Keycloak in podman on port 8080.
  curl / Python ──────────(bearer token)──────────────┘
 ```
 
+The two processes are independent. The dashboard holds no data and needs only an HTTP connection to the data server plus a copy of the token, so it can run on another machine: on your laptop, on a web host, or next to the data. Section 7 covers that setup.
+
 The data server never modifies your data. It reads records and array headers, writes its own catalog database to the output directory, and serves bytes from your files on request.
 
 ---
@@ -202,7 +204,7 @@ The extractor is lenient: a crate with no `sample_code` still loads, with empty 
 uv run tegel-xfm-dash --token-file ~/xfm-run/token
 ```
 
-Options: `--server` (default `http://127.0.0.1:8000`), `--host` (default `127.0.0.1`), `--port` (default `8001`), `--issuer` (Keycloak mode only).
+Options: `--server` (default `http://127.0.0.1:8000`), `--host` (default `127.0.0.1`), `--port` (default `8001`), `--issuer` (Keycloak mode only). The dashboard reads the token file once, at startup. Restart it whenever the data server restarts or the token is replaced. To run it on a different machine from the data server, see section 7.
 
 On the page:
 
@@ -302,19 +304,76 @@ Run it with `uv run python script.py` inside the repository, or install `tegel-c
 
 ---
 
-## 7. Access from another machine
+## 7. Running on different machines
 
-Both processes listen on `127.0.0.1` by default. The safest way to reach them remotely is an SSH tunnel from your laptop:
+The data server and the dashboard can run on different machines. Common setups:
+
+- the data server on the machine that holds the data, and the dashboard on your laptop;
+- the data server on a beamline or analysis node, and the dashboard on a shared web host;
+- both on one machine, viewed from your laptop.
+
+The dashboard needs two things from the data-server host: **network access to port 8000** and **a copy of the token file**.
+
+One rule applies to every setup: **the dashboard's `--server` URL must be exactly the data server's public origin.** The server writes that origin into every `content_url`, and the client sends the token only to that origin. If the two differ, search and metadata still work but image previews fail with `401 … Requires scopes ['read:data']`. Without `--origin`, the public origin is `http://<--host>:<--port>`, i.e. `http://127.0.0.1:8000`.
+
+### 7.1 Option A: SSH tunnel (recommended)
+
+The data server stays on `127.0.0.1` and nothing new is exposed on the network. Because the dashboard reaches it at `127.0.0.1:8000` too, the origins match without any flags.
+
+On the **data host**:
 
 ```bash
-ssh -L 8001:127.0.0.1:8001 -L 8000:127.0.0.1:8000 user@data-host
+uv run tegel-xfm --auth dev --records /data/xfm/caches --output ~/xfm-run
 ```
 
-Then open <http://127.0.0.1:8001> on your laptop.
+On the **dashboard machine**, which also needs the two repositories and `uv sync` (section 2):
 
-To expose the server on the network instead, run `tegel-xfm --host 0.0.0.0 --origin http://data-host:8000`. The `content_url`s use `--origin`, so it must be the address clients will use. **Do not do this with `--auth dev`**: anyone who has the token file can read everything for `--token-hours`. Use Keycloak, or the edge deployment in section 9.
+```bash
+# copy the token (re-copy after every data-server restart)
+scp user@data-host:xfm-run/token ~/xfm-dash/token && chmod 600 ~/xfm-dash/token
 
----
+# terminal 1: forward local port 8000 to the data server
+ssh -N -L 8000:127.0.0.1:8000 user@data-host
+
+# terminal 2: the dashboard, defaults unchanged
+uv run tegel-xfm-dash --token-file ~/xfm-dash/token
+```
+
+Open <http://127.0.0.1:8001> on the dashboard machine.
+
+In Keycloak mode, also forward the Keycloak port (`-L 8080:127.0.0.1:8080`) and copy `credentials` into the same folder as `token`, so the dashboard can refresh its own token.
+
+### 7.2 Option B: direct network access
+
+The data server listens on the network and announces its public address with `--origin`.
+
+On the **data host**:
+
+```bash
+uv run tegel-xfm --auth dev --records /data/xfm/caches --output ~/xfm-run \
+    --host 0.0.0.0 --port 8000 --origin http://data-host.lbl.gov:8000
+```
+
+On the **dashboard machine**:
+
+```bash
+scp user@data-host.lbl.gov:xfm-run/token ~/xfm-dash/token && chmod 600 ~/xfm-dash/token
+uv run tegel-xfm-dash --server http://data-host.lbl.gov:8000 --token-file ~/xfm-dash/token
+```
+
+Use exactly the same string for `--origin` and `--server`. A hostname in one and an IP address in the other will fail. Port 8000 on the data host must be reachable through the firewall.
+
+Do not use Option B with `--auth dev` on a network you don't control: anyone holding the token can read the whole catalog until it expires. In Keycloak mode, Keycloak listens only on the data host's `127.0.0.1`, so the dashboard cannot refresh its token over the network. Either tunnel port 8080 as in Option A, or re-copy the token when it expires. For a properly shared service, use the edge deployment (section 9), which puts the data server, Keycloak and HTTPS behind one origin.
+
+### 7.3 Making the dashboard reachable from other machines
+
+The dashboard has no login of its own: anyone who can open it reads through its token. Keep it on `127.0.0.1` and reach it with a tunnel (`ssh -L 8001:127.0.0.1:8001 user@dash-host`). Use `--host 0.0.0.0` only on a trusted network.
+
+### 7.4 Token lifecycle across machines
+
+- `--auth dev` creates a **new signing key and token on every data-server start**. The old token stops working immediately. After each restart, re-copy `token` and restart the dashboard.
+- Dev tokens expire after `--token-hours` (default 12). For a long session, start the server with a larger value.
+- In Keycloak mode, the dashboard renews the token itself when `credentials` sits next to `token` and `--issuer` reaches Keycloak.
 
 ## 8. Authentication modes
 
@@ -363,6 +422,8 @@ The container image build has not been tested on this branch.
 | `parts` errors: `outside readable storage` | Data lives outside `--records`. Add `--readable DIR`. |
 | `parts` errors: `Tiled adapter … failed` | A zarr header is corrupt or uses a codec Tiled cannot open. Try `zarr.open` on it in Python. |
 | Blank or black preview | Chunk files are missing (zarr returns fill values), or the plane is constant. Try another channel. |
+| Remote dashboard: search works but image preview fails with `401 … read:data` | The dashboard's `--server` differs from the data server's `--origin`, so the token is not sent with array requests. Make them identical, or use the SSH tunnel (7.1). |
+| Remote dashboard: everything returns 401 after a server restart | Dev mode issued a new token. Re-copy `token` and restart the dashboard (7.4). |
 | `port 8000 already in use` | Another server is still running. Use `--port 8010` and `tegel-xfm-dash --server http://127.0.0.1:8010`. |
 | New crates don't appear | The catalog is built only at startup. Restart `tegel-xfm`. |
 | Arrays are deeper than 3 levels inside a store | Write consolidated metadata (`zarr.consolidate_metadata(store)`), or move the arrays up. |
