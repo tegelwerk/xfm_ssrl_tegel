@@ -15,6 +15,10 @@ dependencies = ["numpy", "zarr>=3", "pyyaml"]
 [project.scripts]
 xfm-etl = "xfm_etl.cli:main"
 
+# Tegel pre-ingest converter; loads only when XFM_ETL_READER names a reader.
+[project.entry-points."tegel.converters"]
+xfm = "xfm_etl.converter:XfmConverter"
+
 [dependency-groups]
 dev = ["pytest>=8"]
 

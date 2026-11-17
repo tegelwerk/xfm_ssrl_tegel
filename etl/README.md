@@ -14,7 +14,7 @@ ETL for SSRL X-ray fluorescence microscopy beamline files. It reads the files an
 
 The OME-Zarr image is a standard multiscale image. The channel axis `c` is the MCA channel. Its energy calibration (`offset_ev`, `gain_ev`), the step size and the scaler names are stored in the group attributes under `xfm`. The scale transforms carry the step size in micrometres.
 
-This package does not depend on Tegel. Tegel's XFM data server claims these crates.
+This package does not import Tegel. Tegel's XFM data server claims these crates. The package also registers a Tegel **converter plugin** (`tegel.converters` entry point `xfm`, `xfm_etl.converter`), so Tegel's `ingest-raw` pipeline can run the conversion as its pre-ingest stage. The plugin uses the reader named by `XFM_ETL_READER` and refuses to load without it.
 
 ## Output outline
 

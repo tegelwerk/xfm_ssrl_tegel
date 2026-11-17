@@ -14,7 +14,7 @@ This repository holds four independent components. They share no code, configura
 | --- | --- | --- | --- | --- |
 | Purpose | Beamline files → OME-Zarr scan crates with an aims-leaf record | Catalogs raw scans and serves metadata and sliceable arrays | Processing jobs on a Tegel action server | Search page and image preview |
 | Command | `xfm-etl` | `tegel-xfm` | `tegel-actionserver` (+ this package) | `tegel-xfm-dash` |
-| Package | `etl/` (`xfm-ssrl-etl`), no Tegel dependency | `dataserver/` (plugin), `actions/` (launcher + `xfm.etl` catalog action), `schemas/` | `compute/` (`tegel-xfm-compute`) | `dash/` (`tegel-xfm-dash`) |
+| Package | `etl/` (`xfm-ssrl-etl`), no Tegel import; also Tegel's `xfm` converter plugin | `dataserver/` (plugin), `actions/` (launcher), `schemas/` | `compute/` (`tegel-xfm-compute`) | `dash/` (`tegel-xfm-dash`) |
 | Runs on | where the beamline files are | where the crates are | anywhere | anywhere |
 | Default port | — | 8000 | 8010 | 8001 |
 
@@ -57,18 +57,21 @@ uv run tegel-xfm --auth dev --records /data/xfm/crates --output run \
     --watch /data/beamline --reader <reader>
 ```
 
-This starts a local Prefect server, with its UI at <http://127.0.0.1:4200>, unless `PREFECT_API_URL` points at one. It then serves the flow `xfm-etl-raw-directory` on an interval:
-- each run finds files that have stopped changing and converts them, with one task run per batch, retried once;
-- it then ingests the new crates into the live catalog and refreshes the data server;
-- runs that converted something publish a table of the new scans as an artifact.
+The conversion is a pre-ingest step of Tegel's own ingest pipeline. `xfm-ssrl-etl` registers a **converter plugin** (`tegel.converters` entry point `xfm`). The command above starts:
+- a local Prefect server, with its UI at <http://127.0.0.1:4200>, unless `PREFECT_API_URL` points at one;
+- Tegel's catalog updater;
+- Tegel's `ingest-raw` flow, scheduled every `--interval` seconds.
 
-The first folder under the raw directory names the study, and a ledger makes sure nothing is converted twice. `xfm-etl watch` applies the same rules without Prefect or Tegel and writes crates only (manual §4.5).
+Each pass:
+1. finds raw files that have stopped changing;
+2. converts them with the XFM converter, one task run per unit, retried once;
+3. ingests exactly the new crates through the normal pipeline: staging, the single catalog writer, and a data-server refresh.
+
+No action server is involved. The first folder under the raw directory names the study, and a ledger makes sure nothing is converted twice. `xfm-etl watch` applies the same rules without Prefect or Tegel and writes crates only (manual §4.4).
 
 - The beamline files are only read.
 - `--sample-sheet samples.yaml` adds aims-leaf `PlantSample` fields per sample code.
 - The output is checked against the official OME-Zarr 0.5 models and the aims-leaf pydantic models. Apart from `file_format: zarr`, which aims-leaf's enum lacks, the record validates.
-
-**As a service:** `tegel-xfm --action-server --beamline DIR` also starts an action server next to the data server, offering the catalog action `xfm.etl`. You submit beamline files; the action writes the crates, merges them into the live catalog and refreshes the data server, with no restart (Part II, manual §4.4).
 
 **Status:** only the `synthetic` reader exists. The SSRL beamline-format reader needs a real raw file first (manual §4.2). Details are in [etl/README.md](etl/README.md).
 
@@ -84,7 +87,7 @@ uv run --package tegel-xfm-actions tegel-xfm --auth dev --records /data/xfm/crat
 At startup the server claims every scan crate under `--records`, builds `run/catalog.db` from scratch, and listens on `http://127.0.0.1:8000`. It writes:
 - `run/token`: the bearer token;
 - `run/errors.jsonl`: skipped records;
-- in dev mode, `run/dev-issuer.env`, which lets an action server trust the same token (Part III).
+- in dev mode, `run/dev-issuer.env`, which lets another Tegel service on this machine trust the same token.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -94,22 +97,8 @@ At startup the server claims every scan crate under `--records`, builds `run/cat
 | `--host`, `--port`, `--origin` | `127.0.0.1`, `8000`, `http://<host>:<port>` | where to listen; the public address written into every `content_url` |
 | `--readable DIR` | | extra directories Tiled may read from |
 | `--on-error skip\|fail` | `skip` | skip and log bad records, or stop |
-| `--action-server` | off | also run the co-located action server (port `--action-port` 8010) offering `--actions` (default `xfm.etl`) |
-| `--beamline DIR` | | directories of beamline files `xfm.etl` may read (repeatable) |
-| `--watch DIR --reader R` | | serve the scheduled Prefect ETL flow on that raw directory (implies `--prefect`); `--interval`, `--stable`, `--study`, `--sample-sheet` |
-| `--prefect` | | start a local Prefect server on `--prefect-port` (4200), unless `PREFECT_API_URL` is set |
-
-**ETL on the data server's host.**
-
-```bash
-uv run --package tegel-xfm-actions tegel-xfm --auth dev --records /data/xfm/crates --output run \
-    --action-server --beamline /data/beamline
-curl -H "$H" -H 'Content-Type: application/json' -d '{"action": "xfm.etl",
-  "inputs": {"files": ["file:///data/beamline/scan1.h5"]},
-  "parameters": {"reader": "<reader>", "study": "aapl"}}' http://127.0.0.1:8010/runs
-```
-
-`xfm.etl` is a catalog action: it needs the scope `catalog:write` and holds the `catalog-writer` lock. It writes crates into `--records`, merges them into the live catalog, and calls `/refresh-catalog`.
+| `--watch DIR --reader R` | | run Tegel's `ingest-raw` on that raw directory with the XFM converter (reader `R`), every `--interval` s (30); files must be unchanged for `--stable` s (60); `--study`, `--sample-sheet` |
+| `--prefect-port` | 4200 | port of the local Prefect server `--watch` starts when `PREFECT_API_URL` is unset |
 
 **Record.** The flat class `XfmRawScan` (`schemas/xfm/raw.yaml`) is a projection of the crate's aims-leaf record. Each slot names its aims-leaf source path, or is marked as a gap. Search fields: `sample_code`, `study`, `beamline`, `energy_kev`, `facility`.
 
@@ -127,13 +116,13 @@ curl -H "$H" "$S/api/v1/array/full/<id>/mca-0?slice=640,:,:&format=application/j
 curl -H "$H" "$S/api/v1/array/full/<id>/mca-0?slice=:,48,60&format=application/json"    # one spectrum
 ```
 
-**Production.** `Containerfile` builds the image for the edge deployment in `tegel/tegel-base/deploy`. The image contains the data server, the staging workers and `xfm-etl`, and is pinned to `uv.lock` through `deploy/constraints.txt`.
+**Production.** `Containerfile` builds the image for the edge deployment in `tegel/tegel-base/deploy`. The image contains the data server, the pipeline workers and `xfm-ssrl-etl` (so the `xfm` converter is installed), and is pinned to `uv.lock` through `deploy/constraints.txt`. To convert raw data there, run the `etl` worker as `python -m tegel.actions.ingest raw --interval 60` with `TEGEL_RAW` and `XFM_ETL_READER` set.
 
 ---
 
-# Part III — XFM actions (processing on the action server)
+# Part III — XFM actions (processing, on a separate action server)
 
-Processing jobs are actions on a Tegel action server. Install the action server together with this package:
+Processing lives on its own Tegel action server, which can run anywhere and needs no access to the data server's disk. Install the action server together with this package:
 
 ```bash
 uv sync --package tegel-xfm-compute
@@ -195,7 +184,8 @@ The repository is a uv workspace with five members: `etl`, `dataserver`, `action
 ```bash
 uv sync --group dev
 uv run pytest            # ETL (OME-Zarr + aims-leaf validation), plugin, conformance kit,
-                         # end-to-end serve, actions direct and through an action server, dashboard
+                         # end-to-end serve, Tegel ingest-raw with the XFM converter,
+                         # processing actions direct and through an action server, dashboard
 uv run ruff check .
 ```
 
