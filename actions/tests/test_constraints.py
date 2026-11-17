@@ -13,7 +13,7 @@ REPO = Path(__file__).resolve().parents[2]
 def test_constraints_match_the_lock() -> None:
     exported = subprocess.run(
         ["uv", "export", "--frozen", "--no-hashes", "--all-groups", "--no-emit-workspace",
-         "--no-emit-local", "--no-header", "--no-annotate"],
+         "--no-emit-local", "--no-header", "--no-annotate", "--prune", "aims-leaf"],
         cwd=REPO, check=True, capture_output=True, text=True,
     ).stdout
     committed = (REPO / "deploy" / "constraints.txt").read_text(encoding="utf-8")

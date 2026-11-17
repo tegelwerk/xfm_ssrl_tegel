@@ -27,6 +27,8 @@ CLIENT_ID = "tegel"
 READER = "reader"
 HOST = "127.0.0.1"
 PORT = 8000
+# Scopes on the dev token, so an action server trusting the same issuer accepts it too.
+DEV_SCOPES = "read:metadata read:data actions:read actions:run"
 BASE = f"http://{HOST}:{KEYCLOAK_PORT}"
 REPO = Path(__file__).resolve().parents[5]
 DATASERVER = REPO / "dataserver"
@@ -56,10 +58,19 @@ def main() -> None:
 
         issuer = OIDCIssuer(lifetime=args.token_hours * 3600)
         with issuer as issued:
+            token = issuer.sign(scope=DEV_SCOPES, audience=issued.audience)
+            env = output / "dev-issuer.env"
+            env.write_text(
+                f"TEGEL_AUTH=keycloak\nTEGEL_OIDC_ISSUER={issued.issuer}\n"
+                f"TEGEL_OIDC_AUDIENCE={issued.audience}\nTEGEL_OIDC_CLIENT_ID={issued.client_id}\n",
+                encoding="utf-8",
+            )
+            print(f"Dev issuer for other Tegel services (e.g. an action server): {env}",
+                  flush=True)
             _serve(args, origin, output, profile, schema_root, catalog, readable, count,
                    issuer=issued.issuer, audience=issued.audience,
                    client_id=issued.client_id, client_secret=issued.client_secret,
-                   token=issued.token)
+                   token=token)
         return
     creds = _credentials(output)
     print(f"Keycloak admin: {BASE}/admin  user admin", flush=True)
@@ -119,7 +130,7 @@ def _serve(args, origin, output, profile, schema_root, catalog, readable, count,
     print(f"Listening on {origin}", flush=True)
     print(f"Bearer token written to {token_path}", flush=True)
     print(
-        f'curl -H "Authorization: Bearer $(cat {token_path})" "{origin}/search?campaign=aapl"',
+        f'curl -H "Authorization: Bearer $(cat {token_path})" "{origin}/search?study=aapl"',
         flush=True,
     )
     uvicorn.run(app, host=args.host, port=args.port)

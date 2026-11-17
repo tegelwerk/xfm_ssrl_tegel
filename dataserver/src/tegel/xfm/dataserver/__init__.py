@@ -1,4 +1,10 @@
-"""Processed-measurement plugin. The server loads this module by entry point."""
+"""Raw XRF scan plugin. The server loads this module by entry point.
+
+It claims the scan crates the xfm-ssrl-etl producer writes
+(``<root>/xfm_<typeid>/ro-crate-metadata.json``), projects the crate's aims-leaf
+record onto the flat ``XfmRawScan`` class, and lists the OME-Zarr arrays as parts.
+Processed products are not served here: they are action-server results.
+"""
 
 from __future__ import annotations
 
@@ -7,102 +13,124 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-import yaml
-
 from tegel.core.contracts.resources import DataDescriptor, DataPart, Resource, StructureFamily
 from tegel.core.contracts.types import ResourceType
 from tegel.core.plugins import Extractor, ProcessedDataPackage
 from tegel.xfm.dataserver.typeid import derive, is_typeid
 
-SCHEMA_ID = "https://w3id.org/tegel/xfm/processed"
+SCHEMA_ID = "https://w3id.org/tegel/xfm/raw"
+CRATE_PROFILE = "https://w3id.org/tegel/xfm/raw-scan/0.1"
+METADATA = "ro-crate-metadata.json"
+RECORD_FILE = "aims-leaf.json"
+IMAGE = "scan.ome.zarr"
 
-RECORD = ResourceType(
-    name="xfm.processed",
-    version="3",
-    metadata_schema=SCHEMA_ID,
-)
+RECORD = ResourceType(name="xfm.raw_scan", version="1", metadata_schema=SCHEMA_ID)
 
-# Slots of ProcessedMeasurement that the extractor fills. The schema itself lives
-# outside this package, under TEGEL_SCHEMA_ROOT.
+# XfmRawScan slot -> where it comes from. Paths into the aims-leaf record are
+# documented on each slot in schemas/xfm/raw.yaml (annotation `aims_leaf`), and a
+# test checks this table against them.
 FIELDS = (
     "id",
-    "measurement_id",
+    "title",
+    "scan_name",
     "sample_code",
-    "campaign",
-    "cache",
-    "kind",
-    "beam_energy_kev",
-    "acquired",
+    "study",
     "technique",
-    "crate_path",
-    "designated",
+    "facility",
+    "beamline",
+    "experiment_date",
+    "energy_kev",
+    "dwell_time_ms",
+    "beam_size_um",
+    "processing_status",
+    "raw_data_location",
+    "map_shape",
+    "mca_channels",
+    "step_size_um",
 )
 
 ZARR_MEDIA_TYPE = "application/x-zarr"
-SIDE_FILES = {
-    ".tif": (StructureFamily.array, "image/tiff"),
-    ".tiff": (StructureFamily.array, "image/tiff"),
-    ".csv": (StructureFamily.table, "text/csv;header=present"),
-    ".yaml": (StructureFamily.bytes, "application/yaml"),
-    ".yml": (StructureFamily.bytes, "application/yaml"),
-    ".png": (StructureFamily.bytes, "image/png"),
-    ".txt": (StructureFamily.bytes, "text/plain"),
-}
 
 
-class ProcessedExtractor(Extractor):
-    """Claim a processed measurement record. Other files are left for another plugin."""
+class RawScanExtractor(Extractor):
+    """Claim the RO-Crate metadata file of a scan crate. Everything else is left alone."""
 
     @property
     def plugin_id(self) -> str:
-        return "xfm-processed-v3"
+        return "xfm-raw-scan-v1"
 
     def validate(self, input_path: str) -> bool:
         path = Path(input_path)
-        if path.name == "ro-crate-metadata.json":
-            return _cache_name(path) == "ProcessedCache" and _crate_root(path) is not None
-        body = _object(input_path)
-        return (
-            body is not None
-            and isinstance(body.get("measurement_id"), str)
-            and isinstance(body.get("sample_code"), str)
-            and body.get("cache") == "ProcessedCache"
-        )
+        if path.name != METADATA or not (path.parent / RECORD_FILE).is_file():
+            return False
+        crate = _json(path)
+        return crate is not None and CRATE_PROFILE in _conforms_to(crate)
 
     def process(self, input_path: str, options: dict[str, Any]) -> ProcessedDataPackage:
         path = Path(input_path)
-        if path.name == "ro-crate-metadata.json":
-            body = _record_from_crate(path)
-        else:
-            body = _object(input_path)
-        if body is None:
-            raise ValueError("processed measurement record is not a JSON object")
-        record = {field: _text(body.get(field)) for field in FIELDS}
-        if not record["measurement_id"]:
-            raise ValueError("measurement_id is required")
-        if not is_typeid(record["id"]):
-            record["id"] = derive(record["measurement_id"])
-        record["crate_path"] = record["crate_path"] or "."
-        record["designated"] = record["designated"].strip().rstrip("/")
+        crate = _json(path)
+        record = _json(path.parent / RECORD_FILE)
+        if crate is None or record is None:
+            raise ValueError("scan crate metadata or aims-leaf record is not a JSON object")
+        projected = project(record, _root(crate), path.parent)
         return ProcessedDataPackage(
             payload_path=str(path),
-            record=record,
+            record=projected,
             resource_type=RECORD.name,
             payload_uri=path.resolve().as_uri(),
             metrics={},
         )
 
 
-class ProcessedReader:
-    """List a measurement's parts: every zarr array in the crate, plus side files.
+def project(record: dict[str, Any], root: dict[str, Any], crate_dir: Path) -> dict[str, str]:
+    """The flat ``XfmRawScan`` record from an aims-leaf Dataset and the crate root."""
+    run = _first(record.get("experiment_runs"))
+    sample = _first(record.get("plantsamples")) or _first(record.get("samples"))
+    study = _first(record.get("studies"))
+    instrument = _first(record.get("instruments"))
+    image = _image_attributes(crate_dir / IMAGE)
+    folder = crate_dir.name
+    identifier = _text(root.get("identifier"))
+    if not is_typeid(identifier):
+        identifier = folder if is_typeid(folder) else derive(folder)
+    shape = image.get("shape") or []
+    step = (image.get("xfm") or {}).get("step_size_um")
+    mca = (image.get("xfm") or {}).get("mca") or {}
+    projected = {
+        "id": identifier,
+        "title": _text(record.get("title")),
+        "scan_name": _text(run.get("experiment_code")) or _text(root.get("name")) or folder,
+        "sample_code": _text(sample.get("sample_code")),
+        "study": _text(study.get("title")),
+        "technique": _text(run.get("technique")),
+        "facility": _text(instrument.get("facility_name")),
+        "beamline": _text(run.get("beamline")),
+        "experiment_date": _text(run.get("experiment_date"))[:10],
+        "energy_kev": _quantity(run.get("energy"), "keV"),
+        "dwell_time_ms": _quantity(run.get("dwell_time"), "ms"),
+        "beam_size_um": _quantity(run.get("beam_size_x"), "um"),
+        "processing_status": _text(run.get("processing_status")),
+        "raw_data_location": _text(run.get("raw_data_location")),
+        "map_shape": "x".join(str(size) for size in shape[1:]) if len(shape) == 3 else "",
+        "mca_channels": _text(mca.get("channels") or (shape[0] if len(shape) == 3 else "")),
+        "step_size_um": "x".join(_text(item) for item in step) if step else "",
+    }
+    return {field: projected[field] for field in FIELDS}
 
-    Shape hints come from ``zarr.json`` / ``.zarray``; no chunk is opened.
-    The designated array is the record's ``designated`` store, preferring ``clr``.
+
+class RawScanReader:
+    """Parts of a scan crate, from array headers only (no chunk is read).
+
+    - ``mca-<level>``: the OME-Zarr multiscale levels of the MCA cube ``(c, y, x)``
+    - ``<scaler>``: per-pixel beamline scalers, e.g. ``I0``
+    - ``total_counts``: the quicklook sum map, the designated part
+    - ``aims-leaf``: the aims-leaf record
+    The payload is the RO-Crate metadata file.
     """
 
     @property
     def plugin_id(self) -> str:
-        return "xfm-processed-v3"
+        return "xfm-raw-scan-v1"
 
     def validate(self, resource: Resource) -> bool:
         return resource.type == RECORD.name
@@ -111,97 +139,130 @@ class ProcessedReader:
         uri = resource.payload_uri
         if not uri:
             raise ValueError("payload_uri is required")
-        record_file = _local_path(uri)
-        crate_path = str(resource.metadata.get("crate_path") or "")
-        crate = _crate_dir({"crate_path": crate_path}, record_file)
-        designated = str(resource.metadata.get("designated") or "")
-        crate_mode = record_file.name == "ro-crate-metadata.json"
+        metadata = _local_path(uri)
+        crate = metadata.parent
+        image = crate / IMAGE
         parts: list[DataPart] = []
-        stores = _zarr_stores(crate, designated, crate_mode)
-        chosen = _designated_array(stores, designated)
-        for store in stores:
-            for array_dir, header in _arrays(store):
-                name = _part_name(array_dir.relative_to(crate))
+        levels = _multiscale_paths(image)
+        for path in levels:
+            parts.append(_array_part(f"mca-{path}", image / path, title=f"MCA cube level {path}"))
+        for group in ("scalers", "quicklook"):
+            for array_dir, _header in _arrays(image / group, depth=1):
+                name = array_dir.name
                 parts.append(
-                    DataPart(
-                        name=name,
-                        family=StructureFamily.array,
-                        media_type=ZARR_MEDIA_TYPE,
-                        asset_uri=array_dir.resolve().as_uri(),
-                        designated=array_dir == chosen,
-                        title=str(array_dir.relative_to(crate)),
-                        shape=[int(size) for size in header["shape"]],
-                    )
+                    _array_part(name, array_dir, designated=(name == "total_counts"),
+                                title=f"{group}/{name}")
                 )
-        if crate_mode:
-            for side in sorted(crate.iterdir()):
-                kind = SIDE_FILES.get(side.suffix.lower())
-                if not side.is_file() or kind is None or side.name.startswith("."):
-                    continue
-                family, media_type = kind
-                parts.append(
-                    DataPart(
-                        name=_part_name(Path(side.name)),
-                        family=family,
-                        media_type=media_type,
-                        asset_uri=side.resolve().as_uri(),
-                        title=side.name,
-                    )
+        record = crate / RECORD_FILE
+        if record.is_file():
+            parts.append(
+                DataPart(
+                    name="aims-leaf",
+                    family=StructureFamily.bytes,
+                    media_type="application/json",
+                    asset_uri=record.resolve().as_uri(),
+                    title="aims-leaf record",
                 )
+            )
         _unique(parts)
         payload = DataPart(
             name="payload",
             family=StructureFamily.bytes,
-            media_type="application/json",
+            media_type="application/ld+json",
             asset_uri=uri,
         )
         return DataDescriptor(parts=parts, payload=payload)
 
 
-def _text(value: Any) -> str:
-    if value is None:
+def _array_part(name: str, directory: Path, *, designated: bool = False,
+                title: str | None = None) -> DataPart:
+    header = _zarr_header(directory) or {}
+    return DataPart(
+        name=_part_name(name),
+        family=StructureFamily.array,
+        media_type=ZARR_MEDIA_TYPE,
+        asset_uri=directory.resolve().as_uri(),
+        designated=designated,
+        title=title,
+        shape=[int(size) for size in header.get("shape", [])] or None,
+    )
+
+
+def _multiscale_paths(image: Path) -> list[str]:
+    """Dataset paths of the first OME-Zarr multiscale (NGFF 0.5 or 0.4), finest first."""
+    header = _zarr_header(image) or {}
+    attributes = header.get("attributes") or {}
+    ome = attributes.get("ome") or attributes  # 0.5 nests under "ome"; 0.4 is flat
+    multiscales = ome.get("multiscales") or []
+    if not multiscales:
+        return []
+    paths = [str(item.get("path")) for item in multiscales[0].get("datasets") or []]
+    return [path for path in paths if (image / path).is_dir()]
+
+
+def _image_attributes(image: Path) -> dict[str, Any]:
+    header = _zarr_header(image) or {}
+    attributes = header.get("attributes") or {}
+    levels = _multiscale_paths(image)
+    shape: list[int] = []
+    if levels:
+        shape = list((_zarr_header(image / levels[0]) or {}).get("shape") or [])
+    return {"shape": shape, "xfm": attributes.get("xfm") or {}}
+
+
+def _root(crate: dict[str, Any]) -> dict[str, Any]:
+    for entity in crate.get("@graph") or []:
+        if isinstance(entity, dict) and entity.get("@id") == "./":
+            return entity
+    return {}
+
+
+def _conforms_to(crate: dict[str, Any]) -> set[str]:
+    found: set[str] = set()
+    for entity in crate.get("@graph") or []:
+        if not isinstance(entity, dict) or entity.get("@id") != METADATA:
+            continue
+        value = entity.get("conformsTo")
+        items = value if isinstance(value, list) else [value]
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("@id"), str):
+                found.add(item["@id"])
+            elif isinstance(item, str):
+                found.add(item)
+    return found
+
+
+def _first(value: Any) -> dict[str, Any]:
+    if isinstance(value, list) and value and isinstance(value[0], dict):
+        return value[0]
+    return {}
+
+
+def _quantity(value: Any, unit: str) -> str:
+    """``numeric_value`` of an aims-leaf QuantityValue, if it is in ``unit``."""
+    if not isinstance(value, dict) or value.get("numeric_value") is None:
         return ""
-    return _number_string(value) if not isinstance(value, str) else value
+    if value.get("unit") not in (None, unit):
+        raise ValueError(f"expected a quantity in {unit}, got {value.get('unit')!r}")
+    return _text(value["numeric_value"])
 
 
-def _crate_dir(record: dict[str, str], record_file: Path) -> Path:
-    base = record_file.parent.resolve()
-    crate = record.get("crate_path") or ""
-    if crate not in {"", "."}:
-        candidate = Path(crate)
-        if not candidate.is_absolute():
-            candidate = base / candidate
-        if candidate.is_dir():
-            return candidate.resolve()
-    return base
-
-
-def _zarr_stores(crate: Path, designated: str, crate_mode: bool) -> list[Path]:
-    """The designated store, plus every top-level ``*.zarr`` in a crate directory."""
-    stores: list[Path] = []
-    if designated:
-        candidate = crate / designated
-        if candidate.is_dir():
-            stores.append(candidate)
-    if crate_mode and crate.is_dir():
-        for found in sorted(crate.glob("*.zarr")):
-            if found.is_dir() and found not in stores:
-                stores.append(found)
-    return stores
+def _text(value: Any) -> str:
+    if value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else format(value, "g")
+    return str(value)
 
 
 def _arrays(store: Path, depth: int = 3) -> list[tuple[Path, dict[str, Any]]]:
-    """Arrays in a zarr store (v3 ``zarr.json`` or v2 ``.zarray``), in path order.
+    """Arrays in a zarr group (v3 ``zarr.json`` or v2 ``.zarray``), in path order.
 
-    Uses consolidated metadata when present, else looks ``depth`` levels down.
-    No chunk file is opened.
+    Looks at most ``depth`` levels down; no chunk file is opened.
     """
     header = _zarr_header(store)
     if header is not None and _is_array(header):
         return [(store, header)]
-    consolidated = _consolidated(store, header)
-    if consolidated:
-        return consolidated
     found: list[tuple[Path, dict[str, Any]]] = []
     if depth <= 0 or not store.is_dir():
         return found
@@ -215,14 +276,14 @@ def _zarr_header(directory: Path) -> dict[str, Any] | None:
     for name in ("zarr.json", ".zarray", ".zgroup"):
         path = directory / name
         if path.is_file():
-            try:
-                body = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+            body = _json(path)
+            if body is None:
                 return None
-            if isinstance(body, dict):
-                if name == ".zarray":
-                    body.setdefault("node_type", "array")
-                return body
+            if name == ".zarray":
+                body.setdefault("node_type", "array")
+            if name == ".zgroup" and (directory / ".zattrs").is_file():
+                body["attributes"] = _json(directory / ".zattrs") or {}
+            return body
     return None
 
 
@@ -230,46 +291,9 @@ def _is_array(header: dict[str, Any]) -> bool:
     return header.get("node_type") == "array" and "shape" in header
 
 
-def _consolidated(store: Path, header: dict[str, Any] | None) -> list[tuple[Path, dict[str, Any]]]:
-    metadata: dict[str, Any] = {}
-    v3 = (header or {}).get("consolidated_metadata")
-    if isinstance(v3, dict) and isinstance(v3.get("metadata"), dict):
-        metadata = v3["metadata"]
-    elif (store / ".zmetadata").is_file():
-        try:
-            v2 = json.loads((store / ".zmetadata").read_text(encoding="utf-8")).get("metadata", {})
-        except (OSError, json.JSONDecodeError, AttributeError):
-            v2 = {}
-        metadata = {
-            key.removesuffix("/.zarray"): {**value, "node_type": "array"}
-            for key, value in v2.items()
-            if key.endswith(".zarray") and isinstance(value, dict)
-        }
-    found = [
-        (store / key, value)
-        for key, value in sorted(metadata.items())
-        if isinstance(value, dict) and _is_array(value) and (store / key).is_dir()
-    ]
-    return found
-
-
-def _designated_array(stores: list[Path], designated: str) -> Path | None:
-    if not designated or not stores or stores[0].name != Path(designated).name:
-        return None
-    arrays = [directory for directory, _ in _arrays(stores[0])]
-    if not arrays:
-        return None
-    for directory in arrays:
-        if directory.name == "clr":
-            return directory
-    return arrays[0]
-
-
-def _part_name(relative: Path) -> str:
-    text = "-".join(relative.parts)
+def _part_name(text: str) -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in text)
-    cleaned = cleaned.lstrip("._-") or "part"
-    return cleaned[:128]
+    return (cleaned.lstrip("._-") or "part")[:128]
 
 
 def _unique(parts: list[DataPart]) -> None:
@@ -281,133 +305,12 @@ def _unique(parts: list[DataPart]) -> None:
             parts[index] = part.model_copy(update={"name": f"{part.name[:120]}-{count}"})
 
 
-def _cache_name(metadata_path: Path) -> str:
-    return metadata_path.parent.parent.name
-
-
-def _crate_root(metadata_path: Path) -> dict[str, Any] | None:
-    body = _object(str(metadata_path))
-    graph = body.get("@graph") if isinstance(body, dict) else None
-    if not isinstance(graph, list):
-        return None
-    for entity in graph:
-        if isinstance(entity, dict) and entity.get("@id") == "./":
-            return entity
-    return None
-
-
-def _record_from_crate(metadata_path: Path) -> dict[str, Any]:
-    crate_dir = metadata_path.parent
-    root = _crate_root(metadata_path)
-    if root is None:
-        raise ValueError("processed crate has no root dataset")
-    fuller_path = crate_dir / "lambda-record.yaml"
-    fuller: dict[str, Any] = {}
-    if fuller_path.is_file():
-        loaded = yaml.safe_load(fuller_path.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            fuller = loaded
-    folder = crate_dir.name
-    if is_typeid(folder):
-        name = root.get("name")
-        measurement_id = name if isinstance(name, str) and name.strip() else folder
-        typeid = folder
-    else:
-        measurement_id = folder
-        typeid = derive(folder)
-    sample_code = root.get("sample_code")
-    sample_code = sample_code if isinstance(sample_code, str) else ""
-    technique = root.get("technique")
-    graph = _object(str(metadata_path))
-    entities = graph.get("@graph") if isinstance(graph, dict) else []
-    return {
-        "id": typeid,
-        "measurement_id": measurement_id,
-        "sample_code": sample_code,
-        "campaign": _campaign(sample_code, measurement_id),
-        "cache": "ProcessedCache",
-        "kind": _kind(measurement_id),
-        "beam_energy_kev": _beam_energy(fuller),
-        "acquired": _acquired(root, fuller),
-        "technique": technique if isinstance(technique, str) and technique else "xrf",
-        "crate_path": ".",
-        "designated": _designated(entities if isinstance(entities, list) else []),
-    }
-
-
-def _campaign(sample_code: str, measurement_id: str) -> str:
-    if sample_code.startswith("AAPL") or measurement_id.startswith("aapl-"):
-        return "aapl"
-    if "Germ" in sample_code or measurement_id.startswith("radish-germ"):
-        return "radish-germ"
-    return "radish"
-
-
-def _kind(measurement_id: str) -> str:
-    if measurement_id.startswith("aapl-"):
-        return "mca_fit"
-    if "sulfur-edge" in measurement_id:
-        return "sulfur_edge"
-    return "roi_map"
-
-
-def _beam_energy(record: dict[str, Any]) -> str:
-    direct = record.get("beam_energy_keV")
-    if direct not in (None, ""):
-        return _number_string(direct)
-    for run in record.get("experiment_runs") or []:
-        if not isinstance(run, dict):
-            continue
-        energy = run.get("beam_energy")
-        if isinstance(energy, dict) and energy.get("has_numeric_value") not in (None, ""):
-            return _number_string(energy["has_numeric_value"])
-    image = record.get("xrf_image") or {}
-    energy = image.get("beam_energy") if isinstance(image, dict) else None
-    if isinstance(energy, dict) and energy.get("has_numeric_value") not in (None, ""):
-        return _number_string(energy["has_numeric_value"])
-    return ""
-
-
-def _acquired(root: dict[str, Any], record: dict[str, Any]) -> str:
-    created = root.get("dateCreated")
-    if isinstance(created, str) and created:
-        return created[:10]
-    for run in record.get("experiment_runs") or []:
-        if isinstance(run, dict) and run.get("experiment_date"):
-            return str(run["experiment_date"])[:10]
-    return ""
-
-
-def _designated(graph: list[Any]) -> str:
-    for entity in graph:
-        if isinstance(entity, dict) and entity.get("isDesignated") is True:
-            return str(entity.get("@id") or "")
-    return ""
-
-
-def _number_string(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bool) or value is None:
-        return ""
-    if isinstance(value, float):
-        if value.is_integer():
-            return str(int(value))
-        return format(value, "g")
-    return str(value)
-
-
-def _object(input_path: str) -> dict[str, Any] | None:
-    path = Path(input_path)
-    if not path.is_file() or path.suffix.lower() != ".json":
-        return None
+def _json(path: Path) -> dict[str, Any] | None:
     try:
         body = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if not isinstance(body, dict):
-        return None
-    return body
+    return body if isinstance(body, dict) else None
 
 
 def _local_path(uri: str) -> Path:

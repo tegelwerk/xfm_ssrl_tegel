@@ -1,14 +1,22 @@
-# Processed measurement plugin
+# Raw XRF scan plugin
 
-The dataserver package of the SSRL XFM incarnation (Tegel spec 0.4.0). The reference server loads it through entry points. It ships no schema: the profile in `schema/profile.yaml` names `xfm/processed.yaml` under `TEGEL_SCHEMA_ROOT` (in this repository, `../schemas`).
+The dataserver package of the SSRL XFM incarnation (Tegel spec 0.4.0). The reference server loads it through entry points. It ships no schema: the profile in `schema/profile.yaml` names `xfm/raw.yaml` (class `XfmRawScan`) under `TEGEL_SCHEMA_ROOT`, which in this repository is `../schemas`.
 
-The extractor claims two inputs: a JSON record whose `cache` is `ProcessedCache`, and `ro-crate-metadata.json` inside a `ProcessedCache/<measurement>/` directory. For a crate it also reads `lambda-record.yaml` beside that file. The record holds the slots of `ProcessedMeasurement`. The resource id is `id`, a TypeID with prefix `xfm`: the crate folder name if it is one, else derived from the folder name as a UUIDv5 (`typeid.py`). The payload is the record file itself.
+**Claims.** The extractor claims the scan crates the xfm-ssrl-etl producer writes. A crate is a `ro-crate-metadata.json` whose metadata descriptor `conformsTo` `https://w3id.org/tegel/xfm/raw-scan/0.1`, with an `aims-leaf.json` beside it.
 
-The reader lists the measurement's data parts without opening chunks:
+**Record.** The extractor projects the aims-leaf `Dataset` onto the flat `XfmRawScan` record:
+- run fields come from `experiment_runs[0]`;
+- the sample from `samples`/`plantsamples`, the study from `studies`, the facility from `instruments`;
+- map shape, MCA channel count and step size come from the OME-Zarr attributes.
 
-- every array in the designated zarr store, and in a crate every top-level `*.zarr` store (v3 `zarr.json` or v2 `.zarray`, consolidated metadata when present). Part names are the path inside the crate with `/` replaced by `-`, e.g. `masked-clr.zarr-clr`. The `clr` array of the designated store is the designated part.
-- in a crate, side files at the top level: TIFF (array), CSV (table), YAML, PNG and text (bytes).
+Quantities are checked for their unit. The resource id is the crate's TypeID.
 
-Staging registers zarr, TIFF and CSV parts as Tiled nodes, so clients slice them on Tiled's routes; the rest are served by Tegel with HTTP Range.
+**Parts.** The reader lists, from array headers only:
+- the OME-Zarr multiscale levels as `mca-<level>`;
+- `scalers/*` under their own names;
+- `quicklook/total_counts`, the designated part;
+- `aims-leaf.json` as a bytes part.
 
-Search fields: `sample_code`, `campaign`, `cache`, `kind`, `beam_energy_kev`.
+The payload is `ro-crate-metadata.json`. Processed products are not served here: they are action-server results (`../compute`).
+
+Search fields: `sample_code`, `study`, `beamline`, `energy_kev`, `facility`.

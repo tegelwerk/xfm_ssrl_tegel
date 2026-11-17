@@ -1,27 +1,31 @@
-id: https://w3id.org/tegel/xfm/processed/profile
-name: processed measurements
-schema_id: https://w3id.org/tegel/xfm/processed
-schema_version: "3"
-schema_path: xfm/processed.yaml
-class: ProcessedMeasurement
+id: https://w3id.org/tegel/xfm/raw/profile
+name: raw XRF scans
+schema_id: https://w3id.org/tegel/xfm/raw
+schema_version: "1"
+schema_path: xfm/raw.yaml
+class: XfmRawScan
 search:
   - sample_code
-  - campaign
-  - cache
-  - kind
-  - beam_energy_kev
+  - study
+  - beamline
+  - energy_kev
+  - facility
 properties:
   - id
-  - measurement_id
+  - scan_name
   - sample_code
-  - campaign
-  - cache
-  - kind
-  - beam_energy_kev
-  - acquired
+  - study
   - technique
-  - designated
+  - facility
+  - beamline
+  - experiment_date
+  - energy_kev
+  - dwell_time_ms
+  - map_shape
+  - mca_channels
+  - step_size_um
+  - processing_status
 entity:
-  name: measurement_id
+  name: scan_name
   identifier: id
-  dateCreated: acquired
+  dateCreated: experiment_date

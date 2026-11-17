@@ -1,0 +1,80 @@
+{
+  "@context": "https://w3id.org/ro/crate/1.1/context",
+  "@graph": [
+    {
+      "@id": "ro-crate-metadata.json",
+      "@type": "CreativeWork",
+      "conformsTo": [
+        {
+          "@id": "https://w3id.org/ro/crate/1.1"
+        },
+        {
+          "@id": "https://w3id.org/tegel/xfm/raw-scan/0.1"
+        }
+      ],
+      "about": {
+        "@id": "./"
+      }
+    },
+    {
+      "@id": "./",
+      "@type": "Dataset",
+      "identifier": "xfm_01m7nb2a3ce5ty1cfq2zwhd9x7",
+      "name": "AAPL_10serp_P1_leaf1_fixture",
+      "description": "XRF raster scan AAPL_10serp_P1_leaf1_fixture of AAPL-P1-leaf1",
+      "datePublished": "2026-11-17T17:44:07+00:00",
+      "hasPart": [
+        {
+          "@id": "aims-leaf.json"
+        },
+        {
+          "@id": "scan.ome.zarr/"
+        }
+      ],
+      "mainEntity": {
+        "@id": "scan.ome.zarr/"
+      },
+      "isBasedOn": []
+    },
+    {
+      "@id": "aims-leaf.json",
+      "@type": "File",
+      "name": "aims-leaf record",
+      "encodingFormat": "application/json",
+      "conformsTo": {
+        "@id": "https://w3id.org/aims-leaf/"
+      }
+    },
+    {
+      "@id": "scan.ome.zarr/",
+      "@type": "Dataset",
+      "name": "MCA cube",
+      "encodingFormat": "application/x-zarr",
+      "conformsTo": {
+        "@id": "https://ngff.openmicroscopy.org/0.5/"
+      }
+    },
+    {
+      "@id": "#etl",
+      "@type": "CreateAction",
+      "name": "Convert beamline files to OME-Zarr",
+      "instrument": {
+        "@id": "#xfm-ssrl-etl"
+      },
+      "object": [],
+      "result": [
+        {
+          "@id": "./"
+        }
+      ],
+      "endTime": "2026-11-17T17:44:07+00:00"
+    },
+    {
+      "@id": "#xfm-ssrl-etl",
+      "@type": "SoftwareApplication",
+      "name": "xfm-ssrl-etl",
+      "version": "0.1.0",
+      "description": "reader: synthetic"
+    }
+  ]
+}

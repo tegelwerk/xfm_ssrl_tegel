@@ -1,0 +1,96 @@
+{
+  "id": "urn:typeid:xfm_01m7nb2a3ce5ty1cfq2zwhd9x7",
+  "title": "AAPL-P1-leaf1 AAPL_10serp_P1_leaf1_fixture",
+  "keywords": [
+    "XRF",
+    "x-ray fluorescence microscopy",
+    "SSRL"
+  ],
+  "instruments": [
+    {
+      "id": "urn:xfm:instrument:SSRL-BL2-3",
+      "instrument_code": "SSRL-BL2-3",
+      "instrument_category": "SYNCHROTRON_BEAMLINE",
+      "facility_name": "SSRL",
+      "beamline_id": "BL2-3"
+    }
+  ],
+  "experiment_runs": [
+    {
+      "id": "urn:typeid:xfm_01m7nb2a3ce5ty1cfq2zwhd9x7#run",
+      "title": "XRF raster scan AAPL_10serp_P1_leaf1_fixture",
+      "experiment_code": "AAPL_10serp_P1_leaf1_fixture",
+      "technique": "xray_microprobe",
+      "experiment_date": "2024-05-01",
+      "processing_status": "raw",
+      "beamline": "BL2-3",
+      "energy": {
+        "numeric_value": 10.0,
+        "unit": "keV"
+      },
+      "dwell_time": {
+        "numeric_value": 50.0,
+        "unit": "ms"
+      },
+      "beam_size_x": {
+        "numeric_value": 2.0,
+        "unit": "um"
+      },
+      "beam_size_y": {
+        "numeric_value": 2.0,
+        "unit": "um"
+      }
+    }
+  ],
+  "data_files": [
+    {
+      "id": "urn:typeid:xfm_01m7nb2a3ce5ty1cfq2zwhd9x7#scan.ome.zarr",
+      "file_name": "scan.ome.zarr",
+      "file_format": "zarr",
+      "data_type": "raw_data",
+      "file_role": "converted",
+      "related_entity": "urn:typeid:xfm_01m7nb2a3ce5ty1cfq2zwhd9x7#run",
+      "description": "OME-Zarr 0.5 MCA cube (c, y, x) = (64, 12, 16), 1 level(s)"
+    }
+  ],
+  "experiment_sample_associations": [
+    {
+      "experiment_id": "urn:typeid:xfm_01m7nb2a3ce5ty1cfq2zwhd9x7#run",
+      "sample_id": "urn:xfm:sample:AAPL-P1-leaf1",
+      "role": "target"
+    }
+  ],
+  "experiment_instrument_associations": [
+    {
+      "experiment_id": "urn:typeid:xfm_01m7nb2a3ce5ty1cfq2zwhd9x7#run",
+      "instrument_id": "urn:xfm:instrument:SSRL-BL2-3",
+      "role": "primary"
+    }
+  ],
+  "sample_datafile_associations": [
+    {
+      "sample_id": "urn:xfm:sample:AAPL-P1-leaf1",
+      "data_id": "urn:typeid:xfm_01m7nb2a3ce5ty1cfq2zwhd9x7#scan.ome.zarr",
+      "role": "target"
+    }
+  ],
+  "samples": [
+    {
+      "id": "urn:xfm:sample:AAPL-P1-leaf1",
+      "sample_code": "AAPL-P1-leaf1",
+      "sample_type": "tissue"
+    }
+  ],
+  "studies": [
+    {
+      "id": "urn:xfm:study:aapl",
+      "title": "aapl"
+    }
+  ],
+  "study_experiment_associations": [
+    {
+      "study_id": "urn:xfm:study:aapl",
+      "experiment_id": "urn:typeid:xfm_01m7nb2a3ce5ty1cfq2zwhd9x7#run"
+    }
+  ]
+}

@@ -1,4 +1,5 @@
-# Image for the SSRL XFM data server and the Tegel pipeline workers.
+# Image for the SSRL XFM data server and the Tegel pipeline workers (staging, and the
+# OME-Zarr ETL via xfm-etl).
 # Build context: the directory that contains both checkouts, tegel/ and xfm_ssrl_tegel/
 #   docker build -f xfm_ssrl_tegel/Containerfile -t tegel-dataserver:local .
 # Only package metadata and src/ are copied, so no ignore file is needed (the context
@@ -20,6 +21,8 @@ COPY tegel/tegel-base/packages/dataserver/pyproject.toml tegel/tegel-base/packag
 COPY tegel/tegel-base/packages/dataserver/src /src/dataserver/src
 COPY tegel/tegel-base/packages/actions/pyproject.toml tegel/tegel-base/packages/actions/README.md tegel/tegel-base/packages/actions/LICENSE /src/actions/
 COPY tegel/tegel-base/packages/actions/src /src/actions/src
+COPY xfm_ssrl_tegel/etl/pyproject.toml xfm_ssrl_tegel/etl/README.md xfm_ssrl_tegel/etl/LICENSE /src/xfm/etl/
+COPY xfm_ssrl_tegel/etl/src /src/xfm/etl/src
 COPY xfm_ssrl_tegel/dataserver/pyproject.toml xfm_ssrl_tegel/dataserver/README.md xfm_ssrl_tegel/dataserver/LICENSE /src/xfm/dataserver/
 COPY xfm_ssrl_tegel/dataserver/src /src/xfm/dataserver/src
 COPY xfm_ssrl_tegel/dataserver/schema /src/xfm/dataserver/schema
@@ -34,6 +37,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     "/src/tegel-register[tiled]" \
     /src/dataserver \
     /src/actions \
+    /src/xfm/etl \
     /src/xfm/dataserver
 
 ENV TEGEL_SCHEMA_ROOT=/schemas \

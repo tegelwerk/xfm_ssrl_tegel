@@ -12,7 +12,7 @@ dependencies = []
 package = false
 
 [tool.uv.workspace]
-members = ["dataserver", "dash", "actions"]
+members = ["etl", "dataserver", "dash", "actions", "compute"]
 
 [tool.uv.sources]
 tegel-core = { path = "../tegel/tegel-core", editable = true }
@@ -22,9 +22,18 @@ tegel-register = { path = "../tegel/tegel-register", editable = true }
 tegel-xfm = { workspace = true }
 tegel-xfm-dash = { workspace = true }
 tegel-xfm-actions = { workspace = true }
+xfm-ssrl-etl = { workspace = true }
+tegel-xfm-compute = { workspace = true }
+tegel-actionserver = { path = "../tegel/tegel-actionserver", editable = true }
+aims-leaf = { git = "https://github.com/lambda-ber/aims-leaf" }
 
 [dependency-groups]
 dev = [
+    "xfm-ssrl-etl",
+    "tegel-xfm-compute",
+    "aims-leaf; python_version >= '3.12'",
+    "ome-zarr-models",
+    "pydantic-zarr<0.9",
     "tegel-xfm",
     "tegel-xfm-dash",
     "tegel-xfm-actions",
@@ -37,12 +46,12 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["dataserver/tests", "actions/tests", "dash/tests"]
+testpaths = ["etl/tests", "dataserver/tests", "actions/tests", "compute/tests", "dash/tests"]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["dataserver/src", "dataserver/tests", "dash/src", "dash/tests", "actions/src", "actions/tests"]
+src = ["etl/src", "etl/tests", "dataserver/src", "dataserver/tests", "dash/src", "dash/tests", "actions/src", "actions/tests", "compute/src", "compute/tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tegel-xfm-compute"
+version = "0.1.0"
+description = "XFM processing actions for the Tegel action server."
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["tegel-actionserver", "numpy", "pandas", "zarr>=3", "pyyaml"]
+
+[project.entry-points."tegel.actions"]
+xfm-import-processed = "tegel.xfm.compute.processed:import_processed"
+xfm-roi-maps = "tegel.xfm.compute.roi:roi_maps"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.hatch.build.targets.wheel]
+only-include = ["src/tegel"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "tests", "README.md", "LICENSE", "pyproject.toml"]

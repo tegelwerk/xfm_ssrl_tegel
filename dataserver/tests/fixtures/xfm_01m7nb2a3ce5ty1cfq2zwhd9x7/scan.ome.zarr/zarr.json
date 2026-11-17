@@ -1,0 +1,63 @@
+{
+  "attributes": {
+    "ome": {
+      "version": "0.5",
+      "multiscales": [
+        {
+          "name": "mca",
+          "axes": [
+            {
+              "name": "c",
+              "type": "channel"
+            },
+            {
+              "name": "y",
+              "type": "space",
+              "unit": "micrometer"
+            },
+            {
+              "name": "x",
+              "type": "space",
+              "unit": "micrometer"
+            }
+          ],
+          "datasets": [
+            {
+              "path": "0",
+              "coordinateTransformations": [
+                {
+                  "type": "scale",
+                  "scale": [
+                    1.0,
+                    2.0,
+                    2.0
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "xfm": {
+      "scan_name": "AAPL_10serp_P1_leaf1_fixture",
+      "mca": {
+        "channels": 64,
+        "offset_ev": 0.0,
+        "gain_ev": 10.0
+      },
+      "step_size_um": [
+        2.0,
+        2.0
+      ],
+      "scalers": [
+        "I0"
+      ],
+      "quicklook": [
+        "total_counts"
+      ]
+    }
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

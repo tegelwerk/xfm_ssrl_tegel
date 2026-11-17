@@ -1,0 +1,105 @@
+id: https://w3id.org/tegel/xfm/raw
+name: xfm_raw_scan
+version: "1"
+description: >-
+  Flat search record of one raw XRF raster scan, as written by the xfm-ssrl-etl
+  producer (an OME-Zarr scan crate). Every slot is a projection of the crate's
+  aims-leaf Dataset record (aims-leaf.json); `aims_leaf` names the source path.
+  Slots marked `aims_leaf_gap` have no aims-leaf home yet and come from the
+  OME-Zarr attributes.
+prefixes:
+  aimsleaf: https://w3id.org/aims-leaf/
+  linkml: https://w3id.org/linkml/
+default_prefix: aimsleaf
+classes:
+  XfmRawScan:
+    tree_root: true
+    description: One raw XRF raster scan (aims-leaf ExperimentRun with its sample, instrument and study)
+    attributes:
+      id:
+        range: string
+        description: TypeID (prefix xfm) of the scan crate, minted by the ETL; the crate folder name
+        annotations:
+          aims_leaf: "Dataset.id (urn:typeid:<id>)"
+      title:
+        range: string
+        exact_mappings: [aimsleaf:title]
+        annotations:
+          aims_leaf: Dataset.title
+      scan_name:
+        range: string
+        description: readable scan name from the beamline files
+        exact_mappings: [aimsleaf:experiment_code]
+        annotations:
+          aims_leaf: "experiment_runs[0].experiment_code"
+      sample_code:
+        range: string
+        exact_mappings: [aimsleaf:sample_code]
+        annotations:
+          aims_leaf: "samples[0].sample_code | plantsamples[0].sample_code"
+      study:
+        range: string
+        description: campaign; the aims-leaf Study the scan belongs to
+        exact_mappings: [aimsleaf:title]
+        annotations:
+          aims_leaf: "studies[0].title"
+      technique:
+        range: string
+        exact_mappings: [aimsleaf:technique]
+        annotations:
+          aims_leaf: "experiment_runs[0].technique"
+      facility:
+        range: string
+        exact_mappings: [aimsleaf:facility_name]
+        annotations:
+          aims_leaf: "instruments[0].facility_name"
+      beamline:
+        range: string
+        exact_mappings: [aimsleaf:beamline]
+        annotations:
+          aims_leaf: "experiment_runs[0].beamline"
+      experiment_date:
+        range: string
+        exact_mappings: [aimsleaf:experiment_date]
+        annotations:
+          aims_leaf: "experiment_runs[0].experiment_date"
+      energy_kev:
+        range: string
+        description: incident energy in keV, as a search string
+        exact_mappings: [aimsleaf:energy]
+        annotations:
+          aims_leaf: "experiment_runs[0].energy.numeric_value (unit keV)"
+      dwell_time_ms:
+        range: string
+        exact_mappings: [aimsleaf:dwell_time]
+        annotations:
+          aims_leaf: "experiment_runs[0].dwell_time.numeric_value (unit ms)"
+      beam_size_um:
+        range: string
+        exact_mappings: [aimsleaf:beam_size_x]
+        annotations:
+          aims_leaf: "experiment_runs[0].beam_size_x.numeric_value (unit um)"
+      processing_status:
+        range: string
+        exact_mappings: [aimsleaf:processing_status]
+        annotations:
+          aims_leaf: "experiment_runs[0].processing_status"
+      raw_data_location:
+        range: string
+        exact_mappings: [aimsleaf:raw_data_location]
+        annotations:
+          aims_leaf: "experiment_runs[0].raw_data_location"
+      map_shape:
+        range: string
+        description: map size in pixels, "<ny>x<nx>"
+        annotations:
+          aims_leaf_gap: "no ExperimentRun slot; from the OME-Zarr level 0 shape"
+      mca_channels:
+        range: string
+        annotations:
+          aims_leaf_gap: "no slot; from the OME-Zarr attributes xfm.mca.channels"
+      step_size_um:
+        range: string
+        description: raster step "<y>x<x>" in micrometres
+        annotations:
+          aims_leaf_gap: "no slot; from the OME-Zarr attributes xfm.step_size_um"

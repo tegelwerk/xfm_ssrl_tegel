@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "xfm-ssrl-etl"
+version = "0.1.0"
+description = "ETL for SSRL XFM beamline files: one OME-Zarr scan crate with an aims-leaf record per scan."
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["numpy", "zarr>=3", "pyyaml"]
+
+[project.scripts]
+xfm-etl = "xfm_etl.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.hatch.build.targets.wheel]
+only-include = ["src/xfm_etl"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "tests", "README.md", "LICENSE", "pyproject.toml"]

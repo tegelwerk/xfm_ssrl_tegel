@@ -1,4 +1,4 @@
-"""The dashboard searches the data server and opens one measurement."""
+"""The dashboard searches the data server and opens one scan."""
 
 from collections.abc import Callable
 
@@ -20,10 +20,10 @@ LEAF = {
             "identifier": "aapl-P1-leaf1-10serp",
             "date_created": "2024-05-01",
             "properties": {
-                "measurement_id": "aapl-P1-leaf1-10serp",
+                "scan_name": "AAPL_10serp_P1_leaf1",
                 "sample_code": "AAPL-P1-leaf1",
-                "campaign": "aapl",
-                "kind": "mca_fit",
+                "study": "aapl",
+                "beamline": "BL2-3",
                 "beam_energy_kev": "10",
                 "designated": "masked-clr.zarr/",
             },
@@ -36,13 +36,13 @@ def test_search_returns_hits() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["authorization"] == "Bearer test-token"
         assert request.url.params["sample_code"] == "AAPL-P1-leaf1"
-        assert "campaign" not in request.url.params
+        assert "study" not in request.url.params
         return httpx.Response(200, json=LEAF)
 
     with TestClient(_app(handler)) as client:
         response = client.get(
             "/api/search",
-            params={"sample_code": "AAPL-P1-leaf1", "campaign": ""},
+            params={"sample_code": "AAPL-P1-leaf1", "study": ""},
         )
 
     assert response.status_code == 200
@@ -126,10 +126,10 @@ def test_image_is_a_png_of_the_tiled_slice() -> None:
         if request.url.path == "/resources/leaf-1/data":
             return httpx.Response(
                 200,
-                json={"parts": [_clr([3, 4, 2])]},
+                json={"parts": [_clr([2, 3, 4])]},
             )
         if request.url.path == "/api/v1/array/full/leaf-1/masked-clr.zarr-clr":
-            assert request.url.params["slice"] == ":,:,1"
+            assert request.url.params["slice"] == "1,:,:"
             assert request.url.params["format"] == "application/octet-stream"
             return httpx.Response(200, content=plane.tobytes())
         return httpx.Response(404, json={"detail": "missing"})

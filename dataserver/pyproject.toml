@@ -4,22 +4,22 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tegel-xfm"
-version = "0.2.0"
+version = "0.3.0"
 description = "SSRL XFM dataserver plugin. The server loads it by entry point."
 readme = "README.md"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = ["tegel-core", "pyyaml"]
+dependencies = ["tegel-core"]
 
 [project.entry-points."tegel.resource_types"]
-xfm-processed = "tegel.xfm.dataserver:RECORD"
+xfm-raw-scan = "tegel.xfm.dataserver:RECORD"
 
 [project.entry-points."tegel.extractors"]
-xfm-processed = "tegel.xfm.dataserver:ProcessedExtractor"
+xfm-raw-scan = "tegel.xfm.dataserver:RawScanExtractor"
 
 [project.entry-points."tegel.readers"]
-xfm-processed = "tegel.xfm.dataserver:ProcessedReader"
+xfm-raw-scan = "tegel.xfm.dataserver:RawScanReader"
 
 [dependency-groups]
 dev = ["pytest>=8", "tegel-dataserver", "httpx"]

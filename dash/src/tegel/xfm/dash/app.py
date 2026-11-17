@@ -33,21 +33,21 @@ T = TypeVar("T")
 
 FIELDS = (
     ("sample_code", "Sample code"),
-    ("campaign", "Campaign"),
-    ("cache", "Cache"),
-    ("kind", "Kind"),
-    ("beam_energy_kev", "Beam energy (keV)"),
+    ("study", "Study"),
+    ("beamline", "Beamline"),
+    ("energy_kev", "Energy (keV)"),
+    ("facility", "Facility"),
 )
 COLUMNS = (
-    "measurement_id",
+    "scan_name",
     "id",
     "sample_code",
-    "campaign",
-    "kind",
-    "beam_energy_kev",
-    "acquired",
-    "technique",
-    "designated",
+    "study",
+    "beamline",
+    "energy_kev",
+    "experiment_date",
+    "map_shape",
+    "mca_channels",
 )
 
 
@@ -260,14 +260,18 @@ def _image_part(parts: list[DataPart], name: str | None) -> DataPart | None:
 
 
 def _image_slice(shape: list[int], channel: int) -> tuple[str | None, tuple[int, ...]]:
-    """Pick a 2D plane. The last axis is the channel; axes in between are 0."""
+    """Pick a 2D plane of the last two axes (y, x).
+
+    For 3D and higher the first axis is the channel (OME-Zarr ``c, y, x``); any
+    other leading axes are taken at 0.
+    """
     if len(shape) == 2:
         return None, (shape[0], shape[1])
-    index = min(max(channel, 0), shape[-1] - 1)
-    parts = [":", ":"]
-    parts.extend("0" for _ in shape[2:-1])
-    parts.append(str(index))
-    return ",".join(parts), (shape[0], shape[1])
+    index = min(max(channel, 0), shape[0] - 1)
+    parts = [str(index)]
+    parts.extend("0" for _ in shape[1:-2])
+    parts.extend([":", ":"])
+    return ",".join(parts), (shape[-2], shape[-1])
 
 
 def _array_from_bytes(payload: bytes, data_type: str, shape: tuple[int, ...]) -> numpy.ndarray:
@@ -365,6 +369,9 @@ A selected row shows its image, metadata, and array descriptor.
 </table>
 <section id="detail" hidden>
 <h2 id="detail-title"></h2>
+<label id="part-label" hidden>Array
+<select id="part"></select>
+</label>
 <label id="channel-label" hidden>Channel
 <input id="channel" type="number" min="0" value="0">
 </label>
@@ -399,7 +406,7 @@ async function runSearch() {{
     detail.hidden = true;
     return;
   }}
-  error.textContent = body.count + " measurement(s)";
+  error.textContent = body.count + " scan(s)";
   hits.replaceChildren();
   for (const hit of body.hits) {{
     const row = document.createElement("tr");
@@ -430,33 +437,49 @@ async function openHit(hit, row) {{
   error.textContent = "";
   detail.hidden = false;
   document.querySelector("#detail-title").textContent = body.name || body.id;
-  const data = body.data;
-  const shape = data.shape || [];
-  document.querySelector("#descriptor").textContent =
-    data.family + " " + (data.data_type || "") + " " + shape.join(" × ");
   document.querySelector("#metadata").textContent =
     JSON.stringify(body.metadata, null, 2);
+  const parts = (body.data && body.data.parts) || [];
+  const arrays = parts.filter((part) => part.family === "array" && (part.shape || []).length >= 2);
+  arrays.sort((a, b) => Number(b.designated) - Number(a.designated));
   const preview = document.querySelector("#preview");
+  const partLabel = document.querySelector("#part-label");
+  const select = document.querySelector("#part");
   const channelLabel = document.querySelector("#channel-label");
   const channel = document.querySelector("#channel");
-  if (data.family === "array" && shape.length >= 2) {{
-    const last = shape[shape.length - 1];
-    channel.max = String(Math.max(last - 1, 0));
-    channelLabel.hidden = shape.length < 3;
-    const show = () => {{
-      const index = channel.value || "0";
-      preview.hidden = false;
-      preview.alt = body.name || body.id;
-      preview.src = "/api/resources/" + encodeURIComponent(hit.id)
-        + "/image?channel=" + encodeURIComponent(index);
-    }};
-    channel.onchange = show;
-    show();
-  }} else {{
+  const descriptor = document.querySelector("#descriptor");
+  descriptor.textContent = parts.map((part) => part.name).join(", ");
+  if (!arrays.length) {{
     preview.hidden = true;
     preview.removeAttribute("src");
+    partLabel.hidden = true;
     channelLabel.hidden = true;
+    return;
   }}
+  select.replaceChildren(...arrays.map((part) => {{
+    const option = document.createElement("option");
+    option.value = part.name;
+    option.textContent = part.name + " (" + part.shape.join(" × ") + ")";
+    return option;
+  }}));
+  partLabel.hidden = arrays.length < 2;
+  const show = () => {{
+    const part = arrays.find((item) => item.name === select.value) || arrays[0];
+    const shape = part.shape;
+    channelLabel.hidden = shape.length < 3;
+    channel.max = String(Math.max(shape[0] - 1, 0));
+    const index = shape.length < 3 ? "0" : (channel.value || "0");
+    preview.hidden = false;
+    preview.alt = part.name;
+    preview.src = "/api/resources/" + encodeURIComponent(hit.id)
+      + "/image?part=" + encodeURIComponent(part.name)
+      + "&channel=" + encodeURIComponent(index);
+    descriptor.textContent = part.name + ": " + (part.data_type || "") + " "
+      + shape.join(" × ") + " — parts: " + parts.map((item) => item.name).join(", ");
+  }};
+  select.onchange = () => {{ channel.value = "0"; show(); }};
+  channel.onchange = show;
+  show();
 }}
 </script>
 </body>
