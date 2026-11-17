@@ -39,13 +39,23 @@ uv run xfm-etl readers
 uv run xfm-etl convert --reader synthetic AAPL_10serp_P1_leaf1 --out /data/xfm/crates --study aapl
 ```
 
-Each raster scan becomes one crate, named by a fresh TypeID (`xfm_` + UUIDv7):
+The output directory has a fixed outline, one crate per raster scan:
 
 ```
-/data/xfm/crates/xfm_01m7na0jjzfs38qgngybhb3mpw/
-├── ro-crate-metadata.json      RO-Crate 1.1, conformsTo https://w3id.org/tegel/xfm/raw-scan/0.1
-├── aims-leaf.json              aims-leaf Dataset: ExperimentRun, Sample/PlantSample, Instrument, Study, DataFiles
-└── scan.ome.zarr/              OME-Zarr 0.5: MCA cube (c, y, x) + 2x pyramid, scalers/, quicklook/total_counts
+/data/xfm/crates/
+├── README.md, index.csv                one row per scan: id, study, sample, scan, path, raw sources, …
+└── <study>/<sample_code>/xfm_<typeid>/ the TypeID (UUIDv7) is the unique name
+    ├── ro-crate-metadata.json          RO-Crate 1.1, conformsTo https://w3id.org/tegel/xfm/raw-scan/0.1
+    ├── aims-leaf.json                  aims-leaf Dataset: ExperimentRun, Sample/PlantSample, Instrument, Study, DataFiles
+    └── scan.ome.zarr/                  OME-Zarr 0.5: MCA cube (c, y, x) + 2x pyramid, scalers/, quicklook/total_counts
+```
+
+**Automatic conversion.** Watch a raw directory, and new files are converted as soon as they stop changing. The first folder under the raw directory names the study, and a ledger makes sure nothing is converted twice:
+
+```bash
+uv run xfm-etl watch /data/beamline --reader <reader> --out /data/xfm/crates                 # standalone
+uv run tegel-xfm --auth dev --records /data/xfm/crates --output run \
+    --watch /data/beamline --reader <reader>                                                 # + live catalog
 ```
 
 - The beamline files are only read.
@@ -80,6 +90,7 @@ At startup the server claims every scan crate under `--records`, builds `run/cat
 | `--on-error skip\|fail` | `skip` | skip and log bad records, or stop |
 | `--action-server` | off | also run the co-located action server (port `--action-port` 8010) offering `--actions` (default `xfm.etl`) |
 | `--beamline DIR` | | directories of beamline files `xfm.etl` may read (repeatable) |
+| `--watch DIR --reader R` | | convert new raw files automatically through `xfm.etl` (implies `--action-server`); `--interval`, `--stable`, `--study`, `--sample-sheet` |
 
 **ETL on the data server's host.**
 

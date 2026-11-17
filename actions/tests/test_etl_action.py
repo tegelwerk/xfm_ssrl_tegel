@@ -60,7 +60,8 @@ def test_files_become_crates_in_the_catalog(deployment: Path) -> None:
     assert out["staged"] == 2 and out["errors"] == [] and out["refreshed"] is False
     ids = {crate["id"] for crate in out["crates"]}
     assert ids <= _ids(deployment / "out" / "catalog.db")
-    assert all((deployment / "records" / crate_id).is_dir() for crate_id in ids)
+    assert all(Path(crate["path"]).is_dir() for crate in out["crates"])
+    assert (deployment / "records" / "index.csv").is_file()
     again = etl(_ctx(deployment), files[:1], reader="synthetic")["ingested"]
     assert again["staged"] == 1
     assert len(_ids(deployment / "out" / "catalog.db") & (ids | {again["crates"][0]["id"]})) == 3

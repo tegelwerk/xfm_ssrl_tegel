@@ -67,8 +67,7 @@ def etl(
         raise ValueError("the reader found no scans in the selected files")
     written = []
     for scan in scans:
-        if study:
-            scan.meta.study = study
+        scan.meta.study = study or None
         if samples and scan.meta.sample_code in samples:
             scan.meta.sample = samples[scan.meta.sample_code]
         crate = write_scan(scan, records)

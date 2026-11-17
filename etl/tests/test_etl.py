@@ -32,7 +32,7 @@ def _decode(text: str) -> uuid.UUID:
 
 def test_crate_layout_and_typeid(tmp_path: Path) -> None:
     crate = write_scan(scan(), tmp_path)
-    assert crate.parent == tmp_path and crate.name.startswith("xfm_")
+    assert crate.parent == tmp_path / "aapl" / "AAPL-P1-leaf1" and crate.name.startswith("xfm_")
     assert _decode(crate.name).version == 7
     assert {p.name for p in crate.iterdir()} == {
         "ro-crate-metadata.json", "aims-leaf.json", "scan.ome.zarr"}
@@ -40,7 +40,7 @@ def test_crate_layout_and_typeid(tmp_path: Path) -> None:
     graph = {entity["@id"]: entity for entity in metadata["@graph"]}
     assert {"@id": CRATE_PROFILE} in graph["ro-crate-metadata.json"]["conformsTo"]
     assert graph["./"]["identifier"] == crate.name
-    assert not list(tmp_path.glob(".*partial"))
+    assert not list(tmp_path.rglob(".*partial"))
     with pytest.raises(FileExistsError):
         write_scan(scan(), tmp_path, scan_id=crate.name)
 
@@ -101,10 +101,10 @@ def test_sample_sheet_gives_a_valid_plant_sample(tmp_path: Path) -> None:
 
 def test_cli_converts_with_a_reader(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     sheet = tmp_path / "samples.yaml"
-    sheet.write_text("AAPL-P1-leaf1:\n  genus: Arabidopsis\n", encoding="utf-8")
+    sheet.write_text("a:\n  genus: Arabidopsis\n", encoding="utf-8")
     main(["convert", "--reader", "synthetic", "a", "b", "--out", str(tmp_path / "crates"),
           "--study", "radish", "--sample-sheet", str(sheet)])
-    crates = sorted((tmp_path / "crates").iterdir())
+    crates = sorted(p.parent for p in (tmp_path / "crates").rglob("ro-crate-metadata.json"))
     assert len(crates) == 2
     record = json.loads((crates[0] / "aims-leaf.json").read_text())
     assert record["studies"][0]["title"] == "radish"

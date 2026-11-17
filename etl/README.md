@@ -16,6 +16,15 @@ The OME-Zarr image is a standard multiscale image. The channel axis `c` is the M
 
 This package does not depend on Tegel. Tegel's XFM data server claims these crates.
 
+## Output outline
+
+```
+<out>/
+├── README.md, index.csv              index: id, study, sample, scan, beamline, date, energy, shape, path, sources
+├── .xfm-etl/ledger.json              watcher ledger
+└── <study>/<sample_code>/xfm_<id>/   one crate (above); `--layout flat` puts crates directly under <out>
+```
+
 ## Use
 
 ```bash
@@ -23,7 +32,10 @@ xfm-etl readers                                   # available readers
 xfm-etl convert --reader synthetic a b --out /data/xfm/crates --study aapl
 xfm-etl convert --reader <name> /beamline/files/*.h5 --out /data/xfm/crates \
     --study aapl --sample-sheet samples.yaml
+xfm-etl watch /beamline/files --reader <name> --out /data/xfm/crates   # automatic; --once for cron
 ```
+
+`watch` converts each file once its size and mtime have been stable for `--stable` seconds (default 60) and polls every `--interval` seconds (default 30). The study comes from `--study`, else from the first folder under the raw directory. A ledger in `<out>/.xfm-etl/` prevents double conversion; a file that changes after conversion is logged, not reconverted.
 
 `--sample-sheet` maps a sample code to aims-leaf `PlantSample` fields (genus, species, tissue, growth facility, …). Without a sheet the record carries a generic aims-leaf `Sample`.
 
@@ -36,7 +48,7 @@ crate = write_scan(RawScan(meta=ScanMeta(...), mca=cube_yxc, scalers={"I0": i0})
 
 ## Readers
 
-A reader turns beamline files into `RawScan` objects: the MCA cube `(y, x, channel)`, the scalers and the metadata. Register it in `xfm_etl.readers.READERS`.
+A reader turns beamline files into `RawScan` objects: the MCA cube `(y, x, channel)`, the scalers and the metadata. It also declares the file `patterns` it reads and how files `group` into scans (one file per scan by default). Register it in `xfm_etl.readers.READERS`.
 
 So far only `synthetic` exists, which makes leaf-shaped test scans with K-line peaks. **The SSRL beamline reader still needs a real raw file to be written.**
 

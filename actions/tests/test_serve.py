@@ -53,6 +53,7 @@ class Served:
     token: str
     records: Path
     cube: np.ndarray
+    leaf_crate: Path
 
 
 @pytest.fixture(scope="module")
@@ -60,7 +61,7 @@ def served(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Served]:
     tmp = tmp_path_factory.mktemp("xfm")
     records = tmp / "records"
     leaf = scan("AAPL_10serp_P1_leaf1", shape=(80, 100), channels=128)
-    write_scan(leaf, records, scan_id=LEAF)
+    leaf_crate = write_scan(leaf, records, scan_id=LEAF)
     radish = scan("radish_leaf2", sample_code="RAD-leaf2", shape=(40, 50), channels=128,
                   study="radish", seed=3)
     write_scan(radish, records, scan_id=RADISH)
@@ -87,7 +88,8 @@ def served(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Served]:
             )
         )
         with TestClient(app) as http_client:
-            yield Served(http_client, issued.token, records, np.moveaxis(leaf.mca, -1, 0))
+            yield Served(http_client, issued.token, records, np.moveaxis(leaf.mca, -1, 0),
+                         leaf_crate)
 
 
 def test_xfm_incarnation_conforms(served: Served) -> None:
@@ -99,7 +101,7 @@ def test_xfm_incarnation_conforms(served: Served) -> None:
         resource_id=LEAF,
         search_field="study",
         search_value="aapl",
-        positive_fixture=served.records / LEAF / "ro-crate-metadata.json",
+        positive_fixture=served.leaf_crate / "ro-crate-metadata.json",
         rejected_input=served.records / "README.txt",
         schema_root=SCHEMA_ROOT,
     )

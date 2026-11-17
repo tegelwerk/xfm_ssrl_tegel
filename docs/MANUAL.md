@@ -113,22 +113,29 @@ Without `--records`, `tegel-xfm` serves the tiny committed fixture in `dataserve
 
 ### 4.1 What the ETL writes
 
-One crate per raster scan, in a directory named by a fresh TypeID:
+An output directory with a fixed outline, one crate per raster scan:
 
 ```
-<out>/xfm_01m7na0jjzfs38qgngybhb3mpw/
-├── ro-crate-metadata.json      RO-Crate 1.1, conformsTo https://w3id.org/tegel/xfm/raw-scan/0.1
-├── aims-leaf.json              aims-leaf Dataset (see 4.3)
-└── scan.ome.zarr/              OME-Zarr 0.5 (zarr v3)
-    ├── 0, 1, 2, …              MCA cube (c, y, x); 2x pyramid in y and x, counts summed
-    ├── scalers/I0, …           per-pixel beamline scalers
-    └── quicklook/total_counts  sum over all MCA channels
+<out>/
+├── README.md                              how the directory is organized
+├── index.csv                              one row per scan: id, study, sample, scan name, beamline,
+│                                          date, energy, map shape, MCA channels, path, raw sources, time
+├── .xfm-etl/ledger.json                   the watcher's record of converted raw files (4.5)
+└── <study>/<sample_code>/xfm_<typeid>/    one scan crate; the TypeID is the unique name
+    ├── ro-crate-metadata.json             RO-Crate 1.1, conformsTo https://w3id.org/tegel/xfm/raw-scan/0.1
+    ├── aims-leaf.json                     aims-leaf Dataset (see 4.3)
+    └── scan.ome.zarr/                     OME-Zarr 0.5 (zarr v3)
+        ├── 0, 1, 2, …                     MCA cube (c, y, x); 2x pyramid in y and x, counts summed
+        ├── scalers/I0, …                  per-pixel beamline scalers
+        └── quicklook/total_counts         sum over all MCA channels
 ```
 
+- Scans without a study go under `_unassigned/`. Study and sample folder names keep letters, digits, `.`, `_` and `-`; any other run of characters becomes `_`.
+- `--layout flat` puts crates directly under `<out>` instead.
 - The channel axis `c` is the MCA channel. The energy of channel `n` is `offset_ev + n * gain_ev`. Both values are stored in the image attributes under `xfm.mca`, next to the step size, the channel count and the scaler names.
 - The scale transforms give the pixel size in micrometres at each level.
 - The beamline files are only read, and they are referenced from the crate by `file:` URI.
-- A crate is written under a temporary name and renamed when it is complete.
+- A crate is written under a temporary name and renamed when it is complete, and `index.csv` is rewritten atomically.
 
 ### 4.2 Running it
 
@@ -208,6 +215,36 @@ Without the launcher, set these on a stand-alone action server that has `tegel-x
 - `TEGEL_READABLE_STORAGE` for the beamline directories.
 
 > With Keycloak, the realm does not yet issue `catalog:write` or `actions:*` (untested).
+
+### 4.5 Automatic conversion: watching a raw directory
+
+Point the ETL at a directory of raw files and it converts new files as they appear. Standalone, without Tegel:
+
+```bash
+uv run xfm-etl watch /data/beamline --reader <reader> --out /data/xfm/crates
+```
+
+With the data server and its co-located ETL action server, which is the normal setup:
+
+```bash
+uv run tegel-xfm --auth dev --records /data/xfm/crates --output ~/xfm-run \
+    --watch /data/beamline --reader <reader>
+```
+
+`--watch` implies `--action-server`. Each ready batch becomes one `xfm.etl` run, which converts the files, writes crates into `--records`, merges them into the live catalog and refreshes the data server. New scans become searchable within one poll, without a restart, and each batch has its own run record on the action server.
+
+How the watcher decides what to convert:
+
+| Rule | Detail |
+| --- | --- |
+| Which files | those matching the reader's patterns (`xfm-etl readers` lists them), anywhere under the raw directory, skipping hidden folders |
+| When | a file is converted once it has not changed for `--stable` seconds (default 60), so files still being written wait. The directory is polled every `--interval` seconds (default 30). |
+| Study | `--study` if given, else the first folder under the raw directory (`raw/aapl/...` → `aapl`). Top-level files have no study. |
+| Grouping | the reader groups files into scans; by default one file is one scan |
+| Once only | `<out>/.xfm-etl/ledger.json` records each file's size, mtime, outcome and crate ids. Converted files are never converted again. |
+| Changes | a file that changes after conversion is reported in the log, not reconverted. A failed file is retried once it changes. |
+
+`--sample-sheet samples.yaml` works here too. `xfm-etl watch --once` makes a single pass and exits, which suits a cron job.
 
 ## 5. Serving raw scans (data server)
 
@@ -457,7 +494,9 @@ The image is built and tested: in the container, the ETL writes a crate and the 
 | Path | Contents |
 | --- | --- |
 | `etl/src/xfm_etl/write.py` | OME-Zarr, aims-leaf and RO-Crate writer |
-| `etl/src/xfm_etl/readers/` | beamline readers (`synthetic` so far) |
+| `etl/src/xfm_etl/readers/` | beamline readers (`synthetic` so far): `read`, file `patterns`, scan `group`ing |
+| `etl/src/xfm_etl/watch.py` | the raw-directory watcher and its ledger |
+| `etl/src/xfm_etl/layout.py` | the output outline, `index.csv`, `README.md` |
 | `schemas/xfm/raw.yaml` | LinkML class `XfmRawScan`, with aims-leaf mappings and gaps |
 | `dataserver/schema/profile.yaml` | search fields, displayed properties, id field |
 | `dataserver/src/tegel/xfm/dataserver/__init__.py` | extractor (aims-leaf → record), reader (parts), resource type |

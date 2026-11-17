@@ -11,6 +11,7 @@ import os
 import secrets
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -49,6 +50,15 @@ def main() -> None:
     if not schema_root.is_dir():
         raise SystemExit(f"schema root not found: {schema_root}")
     readable = [records, *[Path(item).resolve() for item in args.readable]]
+    if args.watch:
+        if not args.reader:
+            raise SystemExit("--watch needs --reader (see `xfm-etl readers`)")
+        raw = Path(args.watch).resolve()
+        if not raw.is_dir():
+            raise SystemExit(f"raw directory not found: {raw}")
+        args.action_server = True
+        if str(raw) not in args.beamline:
+            args.beamline.append(str(raw))
     os.environ["TEGEL_PROFILE"] = str(profile)
     os.environ["TEGEL_SCHEMA_ROOT"] = str(schema_root)
     catalog = output / "catalog.db"
@@ -77,12 +87,15 @@ def main() -> None:
                                       audience=issued.audience)
                 actions = _start_action_server(args, output, records, profile, schema_root,
                                                catalog, origin, oidc, refresh_token=service)
+            watcher = _start_watcher(args, records, token) if args.watch else None
             try:
                 _serve(args, origin, output, profile, schema_root, catalog, readable, count,
                        issuer=issued.issuer, audience=issued.audience,
                        client_id=issued.client_id, client_secret=issued.client_secret,
                        token=token)
             finally:
+                if watcher is not None:
+                    watcher.set()
                 _stop(actions)
         return
     creds = _credentials(output)
@@ -98,11 +111,16 @@ def main() -> None:
                 "TEGEL_OIDC_CLIENT_SECRET": creds["client_secret"]}
         actions = _start_action_server(args, output, records, profile, schema_root, catalog,
                                        origin, oidc, refresh_token="")
+    watcher = None
+    if args.watch:
+        watcher = _start_watcher(args, records, _reader_token(issuer_url, creds))
     try:
         _serve(args, origin, output, profile, schema_root, catalog, readable, count,
                issuer=issuer_url, audience=CLIENT_ID, client_id=CLIENT_ID,
                client_secret=creds["client_secret"], token=_reader_token(issuer_url, creds))
     finally:
+        if watcher is not None:
+            watcher.set()
         _stop(actions)
 
 
@@ -200,6 +218,64 @@ def _start_action_server(args, output: Path, records: Path, profile: Path, schem
     return process
 
 
+
+def _start_watcher(args, records: Path, token: str) -> threading.Event:
+    """Watch ``--watch`` and send each ready batch to the co-located ``xfm.etl``.
+
+    Conversion and ingest happen in the action server, one run per batch, so each
+    batch has a run record. The watcher's ledger is ``<records>/.xfm-etl/ledger.json``.
+    """
+    import logging
+
+    import yaml
+
+    from xfm_etl.watch import watch
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    action_origin = args.action_origin or f"http://{args.host}:{args.action_port}"
+    samples = (
+        yaml.safe_load(Path(args.sample_sheet).read_text("utf-8")) if args.sample_sheet else None
+    )
+    stop = threading.Event()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    def convert(batch) -> list[str]:
+        parameters: dict = {"reader": args.reader, "study": batch.study or ""}
+        if samples:
+            parameters["samples"] = samples
+        body = {
+            "action": "xfm.etl",
+            "inputs": {"files": [path.resolve().as_uri() for path in batch.files]},
+            "parameters": parameters,
+        }
+        with httpx.Client(base_url=action_origin, headers=headers, timeout=60) as client:
+            response = client.post("/runs", json=body)
+            response.raise_for_status()
+            run_id = response.json()["id"]
+            run = client.post(f"/runs/{run_id}/wait", params={"timeout": 3600},
+                              timeout=3700).json()
+            if run.get("state") != "succeeded":
+                raise RuntimeError(f"run {run_id} {run.get('state')}: {run.get('error')}")
+            report = client.get(f"/resources/{run_id}/data/ingested/content").json()
+        return [crate["id"] for crate in report.get("crates", [])]
+
+    def loop() -> None:
+        deadline = time.monotonic() + 120
+        while not stop.is_set() and time.monotonic() < deadline:
+            try:
+                if httpx.get(f"{action_origin}/actions", headers=headers, timeout=5).is_success:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(1)
+        watch(Path(args.watch), records, args.reader, convert, interval=args.interval,
+              stable=args.stable, study=args.study, stop=stop.is_set)
+
+    threading.Thread(target=loop, name="xfm-watch", daemon=True).start()
+    print(f"Watching {Path(args.watch).resolve()} (reader {args.reader}); crates into {records}",
+          flush=True)
+    return stop
+
 def _stop(process: subprocess.Popen | None) -> None:
     if process is None or process.poll() is not None:
         return
@@ -234,6 +310,16 @@ def _arguments() -> argparse.Namespace:
                         help="glob of action ids the co-located server offers")
     parser.add_argument("--beamline", action="append", default=[],
                         help="directory of beamline files xfm.etl may read (repeatable)")
+    parser.add_argument("--watch", default="",
+                        help="raw directory to convert automatically (implies --action-server)")
+    parser.add_argument("--reader", default="", help="xfm-etl reader for --watch")
+    parser.add_argument("--study", default=None,
+                        help="study for every watched file (default: first folder under --watch)")
+    parser.add_argument("--sample-sheet", default="",
+                        help="YAML: sample_code -> aims-leaf PlantSample fields")
+    parser.add_argument("--interval", type=float, default=30.0, help="seconds between polls")
+    parser.add_argument("--stable", type=float, default=60.0,
+                        help="seconds a raw file must be unchanged before conversion")
     return parser.parse_args()
 
 

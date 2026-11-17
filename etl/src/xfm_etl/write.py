@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import zarr
 
+from xfm_etl import layout as layouts
 from xfm_etl import typeid
 from xfm_etl.model import RawScan, ScanMeta
 
@@ -29,22 +30,30 @@ _FORMATS = {".h5": "h5", ".hdf5": "hdf5", ".hdf": "hdf5", ".nxs": "hdf5", ".dat"
 
 
 def write_scan(
-    scan: RawScan, out_root: str | Path, *, scan_id: str | None = None, overwrite: bool = False
+    scan: RawScan,
+    out_root: str | Path,
+    *,
+    scan_id: str | None = None,
+    overwrite: bool = False,
+    layout: str = "tree",
 ) -> Path:
-    """Write ``scan`` as ``out_root/<scan_id>/`` and return that directory.
+    """Write ``scan`` as a crate under ``out_root`` and return the crate directory.
 
-    The crate is assembled in a temporary sibling directory and renamed into place,
-    so a crash never leaves a half-written crate under its final name.
+    With the default ``tree`` layout the crate is ``<out>/<study>/<sample>/<scan_id>/``;
+    ``flat`` puts it at ``<out>/<scan_id>/``. ``<out>/index.csv`` and ``README.md`` are
+    kept up to date. The crate is assembled in a temporary sibling directory and
+    renamed into place, so a crash never leaves a half-written crate under its name.
     """
     scan_id = scan_id or typeid.mint()
     root = Path(out_root)
     root.mkdir(parents=True, exist_ok=True)
-    final = root / scan_id
+    final = layouts.crate_dir(root, scan.meta, scan_id, layout)
+    final.parent.mkdir(parents=True, exist_ok=True)
     if final.exists():
         if not overwrite:
             raise FileExistsError(f"crate already exists: {final}")
         shutil.rmtree(final)
-    work = root / f".{scan_id}.partial"
+    work = final.parent / f".{scan_id}.partial"
     if work.exists():
         shutil.rmtree(work)
     work.mkdir()
@@ -58,6 +67,8 @@ def write_scan(
     except BaseException:
         shutil.rmtree(work, ignore_errors=True)
         raise
+    layouts.ensure_readme(root)
+    layouts.update_index(root, layouts.index_row(root, final, scan.meta, scan.mca.shape))
     return final
 
 

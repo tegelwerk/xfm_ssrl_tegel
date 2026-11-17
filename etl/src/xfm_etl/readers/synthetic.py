@@ -13,6 +13,7 @@ from xfm_etl.model import RawScan, ScanMeta
 LINES = {"S": 2308, "Cl": 2622, "K": 3314, "Ca": 3692, "Mn": 5899, "Fe": 6404,
          "Ni": 7478, "Cu": 8048, "Zn": 8639}
 GAIN_EV = 10.0
+PATTERNS = ("*.h5", "*.hdf5", "*.dat")  # any such file stands for one synthetic scan
 
 
 def scan(
@@ -58,5 +59,14 @@ def scan(
 
 def read(paths: list[Path], **options) -> list[RawScan]:
     """One synthetic scan per path name given (the paths need not exist)."""
-    names = [Path(item).stem for item in paths] or ["AAPL_10serp_P1_leaf1"]
-    return [scan(name, seed=index, **options) for index, name in enumerate(names)]
+    paths = [Path(item) for item in paths]
+    if not paths:
+        return [scan(seed=0, **options)]
+    scans = []
+    for index, path in enumerate(paths):
+        options.setdefault("sample_code", None)
+        sample = options["sample_code"] or path.stem.replace("_", "-")
+        raw = scan(path.stem, seed=index, **{**options, "sample_code": sample})
+        raw.meta.raw_files = [path] if path.exists() else []
+        scans.append(raw)
+    return scans
