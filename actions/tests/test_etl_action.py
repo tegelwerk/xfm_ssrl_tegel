@@ -56,8 +56,9 @@ def test_files_become_crates_in_the_catalog(deployment: Path) -> None:
     for item in files:
         item.write_bytes(b"")
     out = etl(_ctx(deployment), files, reader="synthetic", study="radish",
-              samples={"AAPL-P1-leaf1": {"genus": "Arabidopsis"}})["ingested"]
+              samples={"AAPL-10serp-P1-leaf1": {"genus": "Arabidopsis"}})["ingested"]
     assert out["staged"] == 2 and out["errors"] == [] and out["refreshed"] is False
+    assert all("/radish/" in crate["path"] for crate in out["crates"])
     ids = {crate["id"] for crate in out["crates"]}
     assert ids <= _ids(deployment / "out" / "catalog.db")
     assert all(Path(crate["path"]).is_dir() for crate in out["crates"])

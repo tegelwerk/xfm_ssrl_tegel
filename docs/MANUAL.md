@@ -184,6 +184,7 @@ uv run tegel-xfm --auth dev --records /data/xfm/crates --output ~/xfm-run \
 - `--beamline DIR` (repeatable) lists the directories whose files `xfm.etl` may read.
 - The action server is wired to the data server automatically: it writes crates into `--records`, merges into this server's catalog, refreshes it, and trusts the same dev token.
 - Its log is `~/xfm-run/actions.log`. It stops when `tegel-xfm` stops.
+- `xfm.etl` runs the Prefect flow `xfm-etl-files`. With a Prefect server (`--prefect`, or `--watch`), each request is visible there, next to the scheduled runs.
 
 Submit a batch of beamline files:
 
@@ -216,35 +217,63 @@ Without the launcher, set these on a stand-alone action server that has `tegel-x
 
 > With Keycloak, the realm does not yet issue `catalog:write` or `actions:*` (untested).
 
-### 4.5 Automatic conversion: watching a raw directory
+### 4.5 Automatic conversion with Prefect (monitored)
 
-Point the ETL at a directory of raw files and it converts new files as they appear. Standalone, without Tegel:
-
-```bash
-uv run xfm-etl watch /data/beamline --reader <reader> --out /data/xfm/crates
-```
-
-With the data server and its co-located ETL action server, which is the normal setup:
+The automatic ETL is a Prefect flow, so every conversion can be watched, retried and audited in the Prefect UI:
 
 ```bash
 uv run tegel-xfm --auth dev --records /data/xfm/crates --output ~/xfm-run \
-    --watch /data/beamline --reader <reader>
+    --watch /data/beamline --reader <reader> [--action-server]
 ```
 
-`--watch` implies `--action-server`. Each ready batch becomes one `xfm.etl` run, which converts the files, writes crates into `--records`, merges them into the live catalog and refreshes the data server. New scans become searchable within one poll, without a restart, and each batch has its own run record on the action server.
+This starts:
 
-How the watcher decides what to convert:
+| Process | Address | Log |
+| --- | --- | --- |
+| data server | :8000 | console |
+| Prefect server, with its UI (unless `PREFECT_API_URL` is already set, e.g. the stack's Prefect) | <http://127.0.0.1:4200> (`--prefect-port`) | `~/xfm-run/prefect.log` |
+| ETL flow worker, serving two deployments (below) | — | `~/xfm-run/etl-flows.log` |
+| co-located action server, with `--action-server` | :8010 | `~/xfm-run/actions.log` |
+
+**Flows and deployments**
+
+| Flow / deployment | When | What it does |
+| --- | --- | --- |
+| `xfm-etl-raw-directory/watch` | every `--interval` seconds (default 30) | one pass over the raw directory: task `find-ready-files`, then one task `convert …` per batch (retried once), then task `ingest-crates` (stage, merge, refresh) |
+| `xfm-etl-files/files` | on demand | the same for an explicit file list; the `xfm.etl` action runs this flow, so action-server requests appear in Prefect too |
+
+The worker runs one flow at a time, and the catalog merge holds a file lock, so there is one catalog writer.
+
+**What you see in Prefect**
+- **Flow runs:** each with its state and duration. A pass that finds nothing is a short completed run.
+- **Task runs:** one per batch, named after the first file, with logs and retries.
+- **Artifacts**, only for runs that did something:
+  - `xfm-etl-scans`: a table of the scans converted (id, study, sample, scan, shape, channels, path);
+  - `xfm-etl-summary`: converted, staged and skipped counts, whether the catalog was refreshed, failed batches and staging errors.
+- **The `watch` deployment:** pause it to stop automatic conversion, or start a run by hand.
+
+**Rules the flow follows**
 
 | Rule | Detail |
 | --- | --- |
-| Which files | those matching the reader's patterns (`xfm-etl readers` lists them), anywhere under the raw directory, skipping hidden folders |
-| When | a file is converted once it has not changed for `--stable` seconds (default 60), so files still being written wait. The directory is polled every `--interval` seconds (default 30). |
-| Study | `--study` if given, else the first folder under the raw directory (`raw/aapl/...` → `aapl`). Top-level files have no study. |
-| Grouping | the reader groups files into scans; by default one file is one scan |
-| Once only | `<out>/.xfm-etl/ledger.json` records each file's size, mtime, outcome and crate ids. Converted files are never converted again. |
-| Changes | a file that changes after conversion is reported in the log, not reconverted. A failed file is retried once it changes. |
+| Which files | those matching the reader's patterns (`xfm-etl readers`), anywhere under the raw directory, skipping hidden folders |
+| When | once a file has not changed for `--stable` seconds (default 60) |
+| Study | `--study` if given, else the first folder under the raw directory. Top-level files have no study. |
+| Grouping | by the reader; by default one file is one scan |
+| Once only | the ledger `<records>/.xfm-etl/ledger.json` records each file's outcome and crate ids |
+| Changes and failures | a file that changes after conversion is logged, not reconverted. A failed file is retried once it changes. |
 
-`--sample-sheet samples.yaml` works here too. `xfm-etl watch --once` makes a single pass and exits, which suits a cron job.
+**Without the launcher.** The ETL host needs `TEGEL_RECORDS`, `TEGEL_CATALOG_URI`, `TEGEL_PROFILE`, `TEGEL_SCHEMA_ROOT`, `TEGEL_REFRESH_URL` (with `TEGEL_REFRESH_TOKEN` or the OIDC client settings) and `PREFECT_API_URL` set. Then:
+
+```bash
+uv run tegel-xfm-etl serve --raw /data/beamline --reader <reader> --interval 30
+uv run tegel-xfm-etl run   --raw /data/beamline --reader <reader>     # one pass, no server needed
+uv run tegel-xfm-etl files --reader <reader> /data/beamline/a.h5 ...   # these files once
+```
+
+**In the production stack** (`tegel-base/deploy`), point `PREFECT_API_URL` at the stack's Prefect and set `XFM_CATALOG_UPDATER=1`. The merge then goes through the stack's `update-catalog` deployment, which is its single catalog writer, instead of the local lock.
+
+`xfm-etl watch` (section 4.2) is the same rule set without Prefect or Tegel. It only writes crates, and the data server picks them up at its next start.
 
 ## 5. Serving raw scans (data server)
 
@@ -495,7 +524,9 @@ The image is built and tested: in the container, the ETL writes a crate and the 
 | --- | --- |
 | `etl/src/xfm_etl/write.py` | OME-Zarr, aims-leaf and RO-Crate writer |
 | `etl/src/xfm_etl/readers/` | beamline readers (`synthetic` so far): `read`, file `patterns`, scan `group`ing |
-| `etl/src/xfm_etl/watch.py` | the raw-directory watcher and its ledger |
+| `etl/src/xfm_etl/watch.py` | ready-file detection and the ledger; the standalone `xfm-etl watch` |
+| `actions/src/tegel/xfm/actions/flows.py` | the Prefect ETL flows and `tegel-xfm-etl` |
+| `actions/src/tegel/xfm/actions/ingest.py` | stage, merge (locked or via `update-catalog`), refresh |
 | `etl/src/xfm_etl/layout.py` | the output outline, `index.csv`, `README.md` |
 | `schemas/xfm/raw.yaml` | LinkML class `XfmRawScan`, with aims-leaf mappings and gaps |
 | `dataserver/schema/profile.yaml` | search fields, displayed properties, id field |

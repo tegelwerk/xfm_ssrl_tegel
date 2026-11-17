@@ -4461,6 +4461,8 @@ version = "0.3.0"
 source = { editable = "actions" }
 dependencies = [
     { name = "httpx" },
+    { name = "prefect" },
+    { name = "pyyaml" },
     { name = "tegel-actions" },
     { name = "tegel-actionserver" },
     { name = "tegel-core" },
@@ -4473,6 +4475,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx" },
+    { name = "prefect", specifier = ">=3,<4" },
+    { name = "pyyaml" },
     { name = "tegel-actions", editable = "../tegel/tegel-base/packages/actions" },
     { name = "tegel-actionserver", editable = "../tegel/tegel-actionserver" },
     { name = "tegel-core", editable = "../tegel/tegel-core" },

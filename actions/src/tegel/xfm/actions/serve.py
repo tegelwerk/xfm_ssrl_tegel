@@ -11,7 +11,6 @@ import os
 import secrets
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -56,7 +55,7 @@ def main() -> None:
         raw = Path(args.watch).resolve()
         if not raw.is_dir():
             raise SystemExit(f"raw directory not found: {raw}")
-        args.action_server = True
+        args.prefect = True
         if str(raw) not in args.beamline:
             args.beamline.append(str(raw))
     os.environ["TEGEL_PROFILE"] = str(profile)
@@ -78,25 +77,20 @@ def main() -> None:
             )
             print(f"Dev issuer for other Tegel services (e.g. an action server): {env}",
                   flush=True)
-            actions = None
-            if args.action_server:
-                oidc = {"TEGEL_AUTH": "keycloak", "TEGEL_OIDC_ISSUER": issued.issuer,
-                        "TEGEL_OIDC_AUDIENCE": issued.audience,
-                        "TEGEL_OIDC_CLIENT_ID": issued.client_id}
-                service = issuer.sign(subject="xfm-etl", scope="read:metadata",
-                                      audience=issued.audience)
-                actions = _start_action_server(args, output, records, profile, schema_root,
-                                               catalog, origin, oidc, refresh_token=service)
-            watcher = _start_watcher(args, records, token) if args.watch else None
+            oidc = {"TEGEL_AUTH": "keycloak", "TEGEL_OIDC_ISSUER": issued.issuer,
+                    "TEGEL_OIDC_AUDIENCE": issued.audience,
+                    "TEGEL_OIDC_CLIENT_ID": issued.client_id}
+            service = issuer.sign(subject="xfm-etl", scope="read:metadata",
+                                  audience=issued.audience)
+            services = _start_services(args, output, records, profile, schema_root, catalog,
+                                       origin, oidc, refresh_token=service)
             try:
                 _serve(args, origin, output, profile, schema_root, catalog, readable, count,
                        issuer=issued.issuer, audience=issued.audience,
                        client_id=issued.client_id, client_secret=issued.client_secret,
                        token=token)
             finally:
-                if watcher is not None:
-                    watcher.set()
-                _stop(actions)
+                _stop_all(services)
         return
     creds = _credentials(output)
     print(f"Keycloak admin: {BASE}/admin  user admin", flush=True)
@@ -104,25 +98,17 @@ def main() -> None:
     print(f"Reader user {READER} password: {creds['user_password']}", flush=True)
     _start_keycloak(creds["admin_password"])
     issuer_url = _realm(creds)
-    actions = None
-    if args.action_server:
-        oidc = {"TEGEL_AUTH": "keycloak", "TEGEL_OIDC_ISSUER": issuer_url,
-                "TEGEL_OIDC_AUDIENCE": CLIENT_ID, "TEGEL_OIDC_CLIENT_ID": CLIENT_ID,
-                "TEGEL_OIDC_CLIENT_SECRET": creds["client_secret"]}
-        actions = _start_action_server(args, output, records, profile, schema_root, catalog,
-                                       origin, oidc, refresh_token="")
-    watcher = None
-    if args.watch:
-        watcher = _start_watcher(args, records, _reader_token(issuer_url, creds))
+    oidc = {"TEGEL_AUTH": "keycloak", "TEGEL_OIDC_ISSUER": issuer_url,
+            "TEGEL_OIDC_AUDIENCE": CLIENT_ID, "TEGEL_OIDC_CLIENT_ID": CLIENT_ID,
+            "TEGEL_OIDC_CLIENT_SECRET": creds["client_secret"]}
+    services = _start_services(args, output, records, profile, schema_root, catalog, origin,
+                               oidc, refresh_token="")
     try:
         _serve(args, origin, output, profile, schema_root, catalog, readable, count,
                issuer=issuer_url, audience=CLIENT_ID, client_id=CLIENT_ID,
                client_secret=creds["client_secret"], token=_reader_token(issuer_url, creds))
     finally:
-        if watcher is not None:
-            watcher.set()
-        _stop(actions)
-
+        _stop_all(services)
 
 def stage(records: Path, output: Path, readable: list[Path], *, on_error: str = "skip") -> int:
     """Claim every record under ``records``, stage it, and merge into ``output/catalog.db``."""
@@ -178,19 +164,103 @@ def _serve(args, origin, output, profile, schema_root, catalog, readable, count,
 
 
 
-def _start_action_server(args, output: Path, records: Path, profile: Path, schema_root: Path,
-                         catalog: Path, origin: str, oidc: dict[str, str], *,
-                         refresh_token: str) -> subprocess.Popen:
-    """Start the co-located action server, wired to this data server.
-
-    It serves ``--actions`` (default ``xfm.etl``), writes crates into the records
-    directory, merges into this server's catalog, and refreshes it.
-    """
-    beamline = [str(Path(item).resolve()) for item in args.beamline]
-    action_origin = args.action_origin or f"http://{args.host}:{args.action_port}"
+def _etl_env(args, records: Path, profile: Path, schema_root: Path, catalog: Path,
+             oidc: dict[str, str], refresh_token: str, prefect_api: str) -> dict[str, str]:
+    """What the ETL (flows and the xfm.etl action) needs to write this server's catalog."""
     env = {
         **os.environ,
         **oidc,
+        "TEGEL_RECORDS": str(records),
+        "TEGEL_CATALOG_URI": f"sqlite:///{catalog.resolve()}",
+        "TEGEL_PROFILE": str(profile),
+        "TEGEL_SCHEMA_ROOT": str(schema_root),
+        "TEGEL_REFRESH_URL": f"http://{args.host}:{args.port}/refresh-catalog",
+        "TEGEL_REFRESH_TOKEN": refresh_token,
+    }
+    if prefect_api:
+        env["PREFECT_API_URL"] = prefect_api
+    return env
+
+
+def _start_services(args, output: Path, records: Path, profile: Path, schema_root: Path,
+                    catalog: Path, origin: str, oidc: dict[str, str], *,
+                    refresh_token: str) -> list[subprocess.Popen]:
+    """Start what the flags ask for: Prefect, the ETL flows, the co-located action server."""
+    processes: list[subprocess.Popen] = []
+    prefect_api = os.environ.get("PREFECT_API_URL", "").strip()
+    try:
+        if args.prefect and not prefect_api:
+            process, prefect_api = _start_prefect(args, output)
+            processes.append(process)
+        env = _etl_env(args, records, profile, schema_root, catalog, oidc, refresh_token,
+                       prefect_api)
+        if args.watch:
+            processes.append(_start_etl_flows(args, output, env))
+        if args.action_server:
+            processes.append(_start_action_server(args, output, records, origin, env))
+    except BaseException:
+        _stop_all(processes)
+        raise
+    return processes
+
+
+def _start_prefect(args, output: Path) -> tuple[subprocess.Popen, str]:
+    """A local Prefect server (SQLite under ``<output>/prefect``) for monitoring the ETL."""
+    home = (output / "prefect").resolve()
+    home.mkdir(parents=True, exist_ok=True)
+    api = f"http://{args.host}:{args.prefect_port}/api"
+    env = {**os.environ, "PREFECT_HOME": str(home),
+           "PREFECT_SERVER_ANALYTICS_ENABLED": "false",
+           "PREFECT_UI_API_URL": api}
+    log = (output / "prefect.log").open("a", encoding="utf-8")
+    process = subprocess.Popen(
+        [sys.executable, "-m", "prefect", "server", "start", "--host", args.host,
+         "--port", str(args.prefect_port)],
+        env=env, stdout=log, stderr=subprocess.STDOUT,
+    )
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise SystemExit(f"Prefect server exited; see {output / 'prefect.log'}")
+        try:
+            if httpx.get(f"{api}/health", timeout=2).is_success:
+                break
+        except httpx.HTTPError:
+            pass
+        time.sleep(1)
+    else:
+        _stop(process)
+        raise SystemExit(f"Prefect server did not start; see {output / 'prefect.log'}")
+    print(f"Prefect UI: http://{args.host}:{args.prefect_port}  (API {api})", flush=True)
+    return process, api
+
+
+def _start_etl_flows(args, output: Path, env: dict[str, str]) -> subprocess.Popen:
+    """Serve the XFM ETL flows: the scheduled raw-directory pass and the files flow."""
+    if not env.get("PREFECT_API_URL"):
+        raise SystemExit("--watch needs a Prefect API: set PREFECT_API_URL or use --prefect")
+    command = [sys.executable, "-m", "tegel.xfm.actions.flows", "serve",
+               "--raw", str(Path(args.watch).resolve()), "--reader", args.reader,
+               "--interval", str(args.interval), "--stable", str(args.stable)]
+    if args.study:
+        command += ["--study", args.study]
+    if args.sample_sheet:
+        command += ["--sample-sheet", str(Path(args.sample_sheet).resolve())]
+    log = (output / "etl-flows.log").open("a", encoding="utf-8")
+    process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT)
+    print(f"ETL flow xfm-etl-raw-directory/watch every {args.interval:g}s on "
+          f"{Path(args.watch).resolve()} (reader {args.reader}); log {output / 'etl-flows.log'}",
+          flush=True)
+    return process
+
+
+def _start_action_server(args, output: Path, records: Path, origin: str,
+                         etl_env: dict[str, str]) -> subprocess.Popen:
+    """The co-located action server, offering ``--actions`` (default ``xfm.etl``)."""
+    beamline = [str(Path(item).resolve()) for item in args.beamline]
+    action_origin = args.action_origin or f"http://{args.host}:{args.action_port}"
+    env = {
+        **etl_env,
         "TEGEL_PUBLIC_ORIGIN": action_origin,
         "TEGEL_HOST": args.host,
         "TEGEL_PORT": str(args.action_port),
@@ -199,12 +269,6 @@ def _start_action_server(args, output: Path, records: Path, profile: Path, schem
         "TEGEL_FORWARD_ORIGINS": origin,
         "TEGEL_ACTIONS": args.actions,
         "TEGEL_SESSION_SECRET": secrets.token_hex(32),
-        "TEGEL_RECORDS": str(records),
-        "TEGEL_CATALOG_URI": f"sqlite:///{catalog.resolve()}",
-        "TEGEL_PROFILE": str(profile),
-        "TEGEL_SCHEMA_ROOT": str(schema_root),
-        "TEGEL_REFRESH_URL": f"http://{args.host}:{args.port}/refresh-catalog",
-        "TEGEL_REFRESH_TOKEN": refresh_token,
     }
     log = (output / "actions.log").open("a", encoding="utf-8")
     process = subprocess.Popen(
@@ -218,63 +282,10 @@ def _start_action_server(args, output: Path, records: Path, profile: Path, schem
     return process
 
 
+def _stop_all(processes: list[subprocess.Popen]) -> None:
+    for process in reversed(processes):
+        _stop(process)
 
-def _start_watcher(args, records: Path, token: str) -> threading.Event:
-    """Watch ``--watch`` and send each ready batch to the co-located ``xfm.etl``.
-
-    Conversion and ingest happen in the action server, one run per batch, so each
-    batch has a run record. The watcher's ledger is ``<records>/.xfm-etl/ledger.json``.
-    """
-    import logging
-
-    import yaml
-
-    from xfm_etl.watch import watch
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    action_origin = args.action_origin or f"http://{args.host}:{args.action_port}"
-    samples = (
-        yaml.safe_load(Path(args.sample_sheet).read_text("utf-8")) if args.sample_sheet else None
-    )
-    stop = threading.Event()
-    headers = {"Authorization": f"Bearer {token}"}
-
-    def convert(batch) -> list[str]:
-        parameters: dict = {"reader": args.reader, "study": batch.study or ""}
-        if samples:
-            parameters["samples"] = samples
-        body = {
-            "action": "xfm.etl",
-            "inputs": {"files": [path.resolve().as_uri() for path in batch.files]},
-            "parameters": parameters,
-        }
-        with httpx.Client(base_url=action_origin, headers=headers, timeout=60) as client:
-            response = client.post("/runs", json=body)
-            response.raise_for_status()
-            run_id = response.json()["id"]
-            run = client.post(f"/runs/{run_id}/wait", params={"timeout": 3600},
-                              timeout=3700).json()
-            if run.get("state") != "succeeded":
-                raise RuntimeError(f"run {run_id} {run.get('state')}: {run.get('error')}")
-            report = client.get(f"/resources/{run_id}/data/ingested/content").json()
-        return [crate["id"] for crate in report.get("crates", [])]
-
-    def loop() -> None:
-        deadline = time.monotonic() + 120
-        while not stop.is_set() and time.monotonic() < deadline:
-            try:
-                if httpx.get(f"{action_origin}/actions", headers=headers, timeout=5).is_success:
-                    break
-            except httpx.HTTPError:
-                pass
-            time.sleep(1)
-        watch(Path(args.watch), records, args.reader, convert, interval=args.interval,
-              stable=args.stable, study=args.study, stop=stop.is_set)
-
-    threading.Thread(target=loop, name="xfm-watch", daemon=True).start()
-    print(f"Watching {Path(args.watch).resolve()} (reader {args.reader}); crates into {records}",
-          flush=True)
-    return stop
 
 def _stop(process: subprocess.Popen | None) -> None:
     if process is None or process.poll() is not None:
@@ -311,7 +322,11 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--beamline", action="append", default=[],
                         help="directory of beamline files xfm.etl may read (repeatable)")
     parser.add_argument("--watch", default="",
-                        help="raw directory to convert automatically (implies --action-server)")
+                        help="raw directory the scheduled Prefect ETL flow converts (implies "
+                             "--prefect)")
+    parser.add_argument("--prefect", action="store_true",
+                        help="start a local Prefect server (unless PREFECT_API_URL is set)")
+    parser.add_argument("--prefect-port", type=int, default=4200)
     parser.add_argument("--reader", default="", help="xfm-etl reader for --watch")
     parser.add_argument("--study", default=None,
                         help="study for every watched file (default: first folder under --watch)")

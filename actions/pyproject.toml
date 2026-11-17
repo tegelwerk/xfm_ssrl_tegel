@@ -17,12 +17,15 @@ dependencies = [
     "tegel-actions",
     "tegel-actionserver",
     "xfm-ssrl-etl",
+    "prefect>=3,<4",
+    "pyyaml",
     "httpx",
     "uvicorn",
 ]
 
 [project.scripts]
 tegel-xfm = "tegel.xfm.actions.serve:main"
+tegel-xfm-etl = "tegel.xfm.actions.flows:main"
 
 [project.entry-points."tegel.actions"]
 xfm-etl = "tegel.xfm.actions.etl:etl"

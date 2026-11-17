@@ -3,7 +3,8 @@
 The data-server side of the SSRL XFM incarnation:
 
 - the local stage-and-serve command `tegel-xfm`;
-- the catalog action `xfm.etl` (`tegel.actions` entry point). It runs on an action server co-located with the data server, converts beamline files into scan crates, merges them into the live catalog, and refreshes the data server. `tegel-xfm --action-server --beamline DIR` starts that action server too.
+- the Prefect ETL flows (`flows.py`, command `tegel-xfm-etl`): `xfm-etl-raw-directory` (scheduled; converts new raw files) and `xfm-etl-files` (an explicit list). Both convert with `xfm-etl`, then stage, merge and refresh (`ingest.py`). `tegel-xfm --watch DIR --reader R` serves them, with a local Prefect server for monitoring.
+- the catalog action `xfm.etl` (`tegel.actions` entry point). It runs the `xfm-etl-files` flow on an action server co-located with the data server. `tegel-xfm --action-server` starts that action server too.
 
 Stage and serve:
 

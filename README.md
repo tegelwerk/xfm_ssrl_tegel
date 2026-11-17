@@ -50,13 +50,19 @@ The output directory has a fixed outline, one crate per raster scan:
     └── scan.ome.zarr/                  OME-Zarr 0.5: MCA cube (c, y, x) + 2x pyramid, scalers/, quicklook/total_counts
 ```
 
-**Automatic conversion.** Watch a raw directory, and new files are converted as soon as they stop changing. The first folder under the raw directory names the study, and a ledger makes sure nothing is converted twice:
+**Automatic, monitored conversion (Prefect).**
 
 ```bash
-uv run xfm-etl watch /data/beamline --reader <reader> --out /data/xfm/crates                 # standalone
 uv run tegel-xfm --auth dev --records /data/xfm/crates --output run \
-    --watch /data/beamline --reader <reader>                                                 # + live catalog
+    --watch /data/beamline --reader <reader>
 ```
+
+This starts a local Prefect server, with its UI at <http://127.0.0.1:4200>, unless `PREFECT_API_URL` points at one. It then serves the flow `xfm-etl-raw-directory` on an interval:
+- each run finds files that have stopped changing and converts them, with one task run per batch, retried once;
+- it then ingests the new crates into the live catalog and refreshes the data server;
+- runs that converted something publish a table of the new scans as an artifact.
+
+The first folder under the raw directory names the study, and a ledger makes sure nothing is converted twice. `xfm-etl watch` applies the same rules without Prefect or Tegel and writes crates only (manual §4.5).
 
 - The beamline files are only read.
 - `--sample-sheet samples.yaml` adds aims-leaf `PlantSample` fields per sample code.
@@ -90,7 +96,8 @@ At startup the server claims every scan crate under `--records`, builds `run/cat
 | `--on-error skip\|fail` | `skip` | skip and log bad records, or stop |
 | `--action-server` | off | also run the co-located action server (port `--action-port` 8010) offering `--actions` (default `xfm.etl`) |
 | `--beamline DIR` | | directories of beamline files `xfm.etl` may read (repeatable) |
-| `--watch DIR --reader R` | | convert new raw files automatically through `xfm.etl` (implies `--action-server`); `--interval`, `--stable`, `--study`, `--sample-sheet` |
+| `--watch DIR --reader R` | | serve the scheduled Prefect ETL flow on that raw directory (implies `--prefect`); `--interval`, `--stable`, `--study`, `--sample-sheet` |
+| `--prefect` | | start a local Prefect server on `--prefect-port` (4200), unless `PREFECT_API_URL` is set |
 
 **ETL on the data server's host.**
 
