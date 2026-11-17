@@ -14,7 +14,7 @@ This repository holds four independent components. They share no code, configura
 | --- | --- | --- | --- | --- |
 | Purpose | Beamline files → OME-Zarr scan crates with an aims-leaf record | Catalogs raw scans and serves metadata and sliceable arrays | Processing jobs on a Tegel action server | Search page and image preview |
 | Command | `xfm-etl` | `tegel-xfm` | `tegel-actionserver` (+ this package) | `tegel-xfm-dash` |
-| Package | `etl/` (`xfm-ssrl-etl`), no Tegel dependency | `dataserver/` (plugin), `actions/` (launcher), `schemas/` | `compute/` (`tegel-xfm-compute`) | `dash/` (`tegel-xfm-dash`) |
+| Package | `etl/` (`xfm-ssrl-etl`), no Tegel dependency | `dataserver/` (plugin), `actions/` (launcher + `xfm.etl` catalog action), `schemas/` | `compute/` (`tegel-xfm-compute`) | `dash/` (`tegel-xfm-dash`) |
 | Runs on | where the beamline files are | where the crates are | anywhere | anywhere |
 | Default port | — | 8000 | 8010 | 8001 |
 
@@ -52,6 +52,8 @@ Each raster scan becomes one crate, named by a fresh TypeID (`xfm_` + UUIDv7):
 - `--sample-sheet samples.yaml` adds aims-leaf `PlantSample` fields per sample code.
 - The output is checked against the official OME-Zarr 0.5 models and the aims-leaf pydantic models. Apart from `file_format: zarr`, which aims-leaf's enum lacks, the record validates.
 
+**As a service:** `tegel-xfm --action-server --beamline DIR` also starts an action server next to the data server, offering the catalog action `xfm.etl`. You submit beamline files; the action writes the crates, merges them into the live catalog and refreshes the data server, with no restart (Part II, manual §4.4).
+
 **Status:** only the `synthetic` reader exists. The SSRL beamline-format reader needs a real raw file first (manual §4.2). Details are in [etl/README.md](etl/README.md).
 
 ---
@@ -76,6 +78,20 @@ At startup the server claims every scan crate under `--records`, builds `run/cat
 | `--host`, `--port`, `--origin` | `127.0.0.1`, `8000`, `http://<host>:<port>` | where to listen; the public address written into every `content_url` |
 | `--readable DIR` | | extra directories Tiled may read from |
 | `--on-error skip\|fail` | `skip` | skip and log bad records, or stop |
+| `--action-server` | off | also run the co-located action server (port `--action-port` 8010) offering `--actions` (default `xfm.etl`) |
+| `--beamline DIR` | | directories of beamline files `xfm.etl` may read (repeatable) |
+
+**ETL on the data server's host.**
+
+```bash
+uv run --package tegel-xfm-actions tegel-xfm --auth dev --records /data/xfm/crates --output run \
+    --action-server --beamline /data/beamline
+curl -H "$H" -H 'Content-Type: application/json' -d '{"action": "xfm.etl",
+  "inputs": {"files": ["file:///data/beamline/scan1.h5"]},
+  "parameters": {"reader": "<reader>", "study": "aapl"}}' http://127.0.0.1:8010/runs
+```
+
+`xfm.etl` is a catalog action: it needs the scope `catalog:write` and holds the `catalog-writer` lock. It writes crates into `--records`, merges them into the live catalog, and calls `/refresh-catalog`.
 
 **Record.** The flat class `XfmRawScan` (`schemas/xfm/raw.yaml`) is a projection of the crate's aims-leaf record. Each slot names its aims-leaf source path, or is marked as a gap. Search fields: `sample_code`, `study`, `beamline`, `energy_kev`, `facility`.
 

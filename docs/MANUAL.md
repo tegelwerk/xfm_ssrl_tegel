@@ -33,7 +33,7 @@ beamline files ──xfm-etl──► scan crates ──tegel-xfm──► data 
 | Action server | `tegel-actionserver` with `tegel-xfm-compute` | Runs processing jobs (`xfm.roi_maps`, `xfm.import_processed`, …) on request. It reads inputs by URL, including straight from the data server, and keeps every run as a searchable result that records which inputs it `used`. |
 | Dashboard | `tegel-xfm-dash` | Search page with image previews. Talks to the data server with a token. |
 
-Each piece is independent and can run on its own machine. Processed products never live on the data server: they are action-server results.
+Each piece is independent and can run on its own machine, with one deliberate exception. The ETL also runs as a **catalog action** (`xfm.etl`) on an action server co-located with the data server, because it writes that server's catalog (section 4.4). Processed products never live on the data server: they are action-server results.
 
 ---
 
@@ -164,6 +164,51 @@ It validates against the aims-leaf pydantic models with one exception: `file_for
 
 ---
 
+### 4.4 Running the ETL as a service (co-located action server)
+
+In day-to-day operation the ETL runs on an action server next to the data server, as the catalog action `xfm.etl`. One command starts both:
+
+```bash
+uv run tegel-xfm --auth dev --records /data/xfm/crates --output ~/xfm-run \
+    --action-server --beamline /data/beamline
+```
+
+- The data server listens on :8000, as before. The action server listens on :8010 (`--action-port`, `--action-origin`) and offers only `xfm.etl` (`--actions` takes a glob of action ids).
+- `--beamline DIR` (repeatable) lists the directories whose files `xfm.etl` may read.
+- The action server is wired to the data server automatically: it writes crates into `--records`, merges into this server's catalog, refreshes it, and trusts the same dev token.
+- Its log is `~/xfm-run/actions.log`. It stops when `tegel-xfm` stops.
+
+Submit a batch of beamline files:
+
+```bash
+T=$(cat ~/xfm-run/token); H="Authorization: Bearer $T"
+RUN=$(curl -s -H "$H" -H 'Content-Type: application/json' -d '{
+  "action": "xfm.etl",
+  "inputs": {"files": ["file:///data/beamline/AAPL_10serp_P2_leaf1.h5",
+                       "file:///data/beamline/RAD_leaf7.h5"]},
+  "parameters": {"reader": "synthetic", "study": "aapl"}}' \
+  http://127.0.0.1:8010/runs | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
+curl -X POST -H "$H" "http://127.0.0.1:8010/runs/$RUN/wait?timeout=600"
+curl -H "$H" http://127.0.0.1:8010/resources/$RUN/data/ingested/content
+```
+
+The run:
+1. converts the files with the named reader;
+2. writes one crate per scan into the records directory;
+3. stages the new crates with the plugin and merges them into the live catalog (`staged`, `skipped` and `errors` are reported in the `ingested` output);
+4. calls the data server's `/refresh-catalog`.
+
+The new scans are searchable at once, with no restart. A restart re-stages everything under `--records`, so the catalog and the crates stay consistent.
+
+`xfm.etl` needs the scope `catalog:write`, which the dev token carries, and it holds the resource `catalog-writer`, so ETL runs on one catalog never overlap. The optional parameter `samples` maps sample codes to aims-leaf PlantSample fields, like `--sample-sheet`.
+
+Without the launcher, set these on a stand-alone action server that has `tegel-xfm-actions` installed:
+- `TEGEL_RECORDS`, `TEGEL_CATALOG_URI`, `TEGEL_PROFILE`, `TEGEL_SCHEMA_ROOT`;
+- `TEGEL_REFRESH_URL`, with `TEGEL_REFRESH_TOKEN` or the OIDC client settings;
+- `TEGEL_READABLE_STORAGE` for the beamline directories.
+
+> With Keycloak, the realm does not yet issue `catalog:write` or `actions:*` (untested).
+
 ## 5. Serving raw scans (data server)
 
 ### 5.1 Run it
@@ -279,7 +324,7 @@ with DataClient("http://127.0.0.1:8000", token=token) as client:
 
 ## 7. Processing (action server)
 
-Processing jobs are actions on a Tegel action server. The XFM ones live in `compute/` (package `tegel-xfm-compute`):
+Processing jobs are actions on a Tegel action server. The ETL catalog action `xfm.etl` lives with the data server (section 4.4). The compute actions live in `compute/` (package `tegel-xfm-compute`) and can run on any action server:
 
 | Action | Input | Parameters | Outputs |
 | --- | --- | --- | --- |
@@ -366,7 +411,7 @@ In dev mode every data-server restart creates a new signing key. The old token, 
 
 ## 10. Authentication modes
 
-- **`--auth dev`** (local): an issuer inside `tegel-xfm` signs one token, written to `<output>/token`, with read and `actions:*` scopes. It lasts `--token-hours` (default 12). `dev-issuer.env` lets an action server trust it.
+- **`--auth dev`** (local): an issuer inside `tegel-xfm` signs one token, written to `<output>/token`, with read, `actions:*` and `catalog:write` scopes. It lasts `--token-hours` (default 12). `dev-issuer.env` lets an action server trust it.
 - **`--auth keycloak`** (default; untested end to end):
   - starts `quay.io/keycloak/keycloak:26.4.0` in podman on `127.0.0.1:8080`;
   - creates the realm `tegel`, the client `tegel` and the user `reader`;
@@ -417,7 +462,8 @@ The image is built and tested: in the container, the ETL writes a crate and the 
 | `dataserver/schema/profile.yaml` | search fields, displayed properties, id field |
 | `dataserver/src/tegel/xfm/dataserver/__init__.py` | extractor (aims-leaf → record), reader (parts), resource type |
 | `dataserver/tests/fixtures/xfm_…/` | a small ETL-written crate; the committed positive fixture |
-| `actions/src/tegel/xfm/actions/serve.py` | the `tegel-xfm` launcher |
+| `actions/src/tegel/xfm/actions/serve.py` | the `tegel-xfm` launcher, including `--action-server` |
+| `actions/src/tegel/xfm/actions/etl.py` | the `xfm.etl` catalog action |
 | `compute/src/tegel/xfm/compute/` | action-server actions |
 | `dash/src/tegel/xfm/dash/app.py` | the dashboard |
 

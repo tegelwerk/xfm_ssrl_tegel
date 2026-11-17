@@ -1,6 +1,11 @@
 # tegel-xfm-actions
 
-Actions for the SSRL XFM incarnation. For now this is the local stage-and-serve command `tegel-xfm`:
+The data-server side of the SSRL XFM incarnation:
+
+- the local stage-and-serve command `tegel-xfm`;
+- the catalog action `xfm.etl` (`tegel.actions` entry point). It runs on an action server co-located with the data server, converts beamline files into scan crates, merges them into the live catalog, and refreshes the data server. `tegel-xfm --action-server --beamline DIR` starts that action server too.
+
+Stage and serve:
 
 ```bash
 uv run tegel-xfm --auth dev --records /path/to/crates --output run

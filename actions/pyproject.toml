@@ -4,16 +4,28 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tegel-xfm-actions"
-version = "0.2.0"
-description = "Actions for the SSRL XFM incarnation: stage processed records and serve them."
+version = "0.3.0"
+description = "Data-server side of the SSRL XFM incarnation: the tegel-xfm launcher and the xfm.etl catalog action."
 readme = "README.md"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = ["tegel-core", "tegel-xfm", "tegel-dataserver", "tegel-actions", "httpx", "uvicorn"]
+dependencies = [
+    "tegel-core",
+    "tegel-xfm",
+    "tegel-dataserver",
+    "tegel-actions",
+    "tegel-actionserver",
+    "xfm-ssrl-etl",
+    "httpx",
+    "uvicorn",
+]
 
 [project.scripts]
 tegel-xfm = "tegel.xfm.actions.serve:main"
+
+[project.entry-points."tegel.actions"]
+xfm-etl = "tegel.xfm.actions.etl:etl"
 
 [tool.hatch.build.targets.wheel]
 only-include = ["src/tegel"]

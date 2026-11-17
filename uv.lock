@@ -4457,25 +4457,29 @@ dev = [
 
 [[package]]
 name = "tegel-xfm-actions"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "actions" }
 dependencies = [
     { name = "httpx" },
     { name = "tegel-actions" },
+    { name = "tegel-actionserver" },
     { name = "tegel-core" },
     { name = "tegel-dataserver" },
     { name = "tegel-xfm" },
     { name = "uvicorn" },
+    { name = "xfm-ssrl-etl" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx" },
     { name = "tegel-actions", editable = "../tegel/tegel-base/packages/actions" },
+    { name = "tegel-actionserver", editable = "../tegel/tegel-actionserver" },
     { name = "tegel-core", editable = "../tegel/tegel-core" },
     { name = "tegel-dataserver", editable = "../tegel/tegel-base/packages/dataserver" },
     { name = "tegel-xfm", editable = "dataserver" },
     { name = "uvicorn" },
+    { name = "xfm-ssrl-etl", editable = "etl" },
 ]
 
 [[package]]

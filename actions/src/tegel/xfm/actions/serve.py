@@ -10,6 +10,7 @@ import argparse
 import os
 import secrets
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -28,7 +29,7 @@ READER = "reader"
 HOST = "127.0.0.1"
 PORT = 8000
 # Scopes on the dev token, so an action server trusting the same issuer accepts it too.
-DEV_SCOPES = "read:metadata read:data actions:read actions:run"
+DEV_SCOPES = "read:metadata read:data actions:read actions:run catalog:write"
 BASE = f"http://{HOST}:{KEYCLOAK_PORT}"
 REPO = Path(__file__).resolve().parents[5]
 DATASERVER = REPO / "dataserver"
@@ -67,10 +68,22 @@ def main() -> None:
             )
             print(f"Dev issuer for other Tegel services (e.g. an action server): {env}",
                   flush=True)
-            _serve(args, origin, output, profile, schema_root, catalog, readable, count,
-                   issuer=issued.issuer, audience=issued.audience,
-                   client_id=issued.client_id, client_secret=issued.client_secret,
-                   token=token)
+            actions = None
+            if args.action_server:
+                oidc = {"TEGEL_AUTH": "keycloak", "TEGEL_OIDC_ISSUER": issued.issuer,
+                        "TEGEL_OIDC_AUDIENCE": issued.audience,
+                        "TEGEL_OIDC_CLIENT_ID": issued.client_id}
+                service = issuer.sign(subject="xfm-etl", scope="read:metadata",
+                                      audience=issued.audience)
+                actions = _start_action_server(args, output, records, profile, schema_root,
+                                               catalog, origin, oidc, refresh_token=service)
+            try:
+                _serve(args, origin, output, profile, schema_root, catalog, readable, count,
+                       issuer=issued.issuer, audience=issued.audience,
+                       client_id=issued.client_id, client_secret=issued.client_secret,
+                       token=token)
+            finally:
+                _stop(actions)
         return
     creds = _credentials(output)
     print(f"Keycloak admin: {BASE}/admin  user admin", flush=True)
@@ -78,9 +91,19 @@ def main() -> None:
     print(f"Reader user {READER} password: {creds['user_password']}", flush=True)
     _start_keycloak(creds["admin_password"])
     issuer_url = _realm(creds)
-    _serve(args, origin, output, profile, schema_root, catalog, readable, count,
-           issuer=issuer_url, audience=CLIENT_ID, client_id=CLIENT_ID,
-           client_secret=creds["client_secret"], token=_reader_token(issuer_url, creds))
+    actions = None
+    if args.action_server:
+        oidc = {"TEGEL_AUTH": "keycloak", "TEGEL_OIDC_ISSUER": issuer_url,
+                "TEGEL_OIDC_AUDIENCE": CLIENT_ID, "TEGEL_OIDC_CLIENT_ID": CLIENT_ID,
+                "TEGEL_OIDC_CLIENT_SECRET": creds["client_secret"]}
+        actions = _start_action_server(args, output, records, profile, schema_root, catalog,
+                                       origin, oidc, refresh_token="")
+    try:
+        _serve(args, origin, output, profile, schema_root, catalog, readable, count,
+               issuer=issuer_url, audience=CLIENT_ID, client_id=CLIENT_ID,
+               client_secret=creds["client_secret"], token=_reader_token(issuer_url, creds))
+    finally:
+        _stop(actions)
 
 
 def stage(records: Path, output: Path, readable: list[Path], *, on_error: str = "skip") -> int:
@@ -136,6 +159,56 @@ def _serve(args, origin, output, profile, schema_root, catalog, readable, count,
     uvicorn.run(app, host=args.host, port=args.port)
 
 
+
+def _start_action_server(args, output: Path, records: Path, profile: Path, schema_root: Path,
+                         catalog: Path, origin: str, oidc: dict[str, str], *,
+                         refresh_token: str) -> subprocess.Popen:
+    """Start the co-located action server, wired to this data server.
+
+    It serves ``--actions`` (default ``xfm.etl``), writes crates into the records
+    directory, merges into this server's catalog, and refreshes it.
+    """
+    beamline = [str(Path(item).resolve()) for item in args.beamline]
+    action_origin = args.action_origin or f"http://{args.host}:{args.action_port}"
+    env = {
+        **os.environ,
+        **oidc,
+        "TEGEL_PUBLIC_ORIGIN": action_origin,
+        "TEGEL_HOST": args.host,
+        "TEGEL_PORT": str(args.action_port),
+        "TEGEL_RESULTS_DIR": str((output / "actions").resolve()),
+        "TEGEL_READABLE_STORAGE": os.pathsep.join([*beamline, str(records)]),
+        "TEGEL_FORWARD_ORIGINS": origin,
+        "TEGEL_ACTIONS": args.actions,
+        "TEGEL_SESSION_SECRET": secrets.token_hex(32),
+        "TEGEL_RECORDS": str(records),
+        "TEGEL_CATALOG_URI": f"sqlite:///{catalog.resolve()}",
+        "TEGEL_PROFILE": str(profile),
+        "TEGEL_SCHEMA_ROOT": str(schema_root),
+        "TEGEL_REFRESH_URL": f"http://{args.host}:{args.port}/refresh-catalog",
+        "TEGEL_REFRESH_TOKEN": refresh_token,
+    }
+    log = (output / "actions.log").open("a", encoding="utf-8")
+    process = subprocess.Popen(
+        [sys.executable, "-m", "tegel.actionserver", "serve"],
+        env=env, stdout=log, stderr=subprocess.STDOUT,
+    )
+    print(f"Action server ({args.actions}) on {action_origin}; log {output / 'actions.log'}",
+          flush=True)
+    if beamline:
+        print(f"Beamline files readable by xfm.etl under: {', '.join(beamline)}", flush=True)
+    return process
+
+
+def _stop(process: subprocess.Popen | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="tegel-xfm")
     parser.add_argument("--records", default=str(DATASERVER / "tests" / "fixtures"))
@@ -153,6 +226,14 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--host", default=HOST)
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--origin", default="", help="public origin, if behind a proxy")
+    parser.add_argument("--action-server", action="store_true",
+                        help="also run the co-located action server (the xfm.etl pipeline)")
+    parser.add_argument("--action-port", type=int, default=8010)
+    parser.add_argument("--action-origin", default="", help="action server public origin")
+    parser.add_argument("--actions", default="xfm.etl",
+                        help="glob of action ids the co-located server offers")
+    parser.add_argument("--beamline", action="append", default=[],
+                        help="directory of beamline files xfm.etl may read (repeatable)")
     return parser.parse_args()
 
 
